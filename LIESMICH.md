@@ -95,6 +95,8 @@ entfernt, damit nichts doppelt startet.
 - `Setup.cs`             – Quellcode des Installers/Deinstallers
 - `settings.txt`         – gespeicherte Auswahl (lokal, nicht im Repo)
 - `background.png`       – dein Hintergrundbild
+- `icon.ico`             – Programm-Icon (Synthwave-Sonne), wird beim Bauen in beide EXEs eingebettet
+- `tools\make-icon.ps1`  – erzeugt `icon.ico` neu (alle Größen von 16 bis 256 px; `-Preview datei.png` für eine Vorschau)
 - `build.ps1`            – baut `CyberWallpaper.exe` (nutzt den eingebauten C#-Compiler)
 - `build-setup.ps1`      – baut danach den Installer `CyberWallpaper-Setup.exe`
 

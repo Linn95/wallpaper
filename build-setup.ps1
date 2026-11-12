@@ -17,6 +17,7 @@ if (-not (Test-Path $csc)) {
 }
 if (-not (Test-Path $csc)) { throw "csc.exe nicht gefunden." }
 
+if (-not (Test-Path icon.ico)) { throw "Datei fehlt: icon.ico (neu erzeugen mit .\tools\make-icon.ps1)" }
 $payload = 'CyberWallpaper.exe', 'background.png', 'city_mask.png', 'cloud_mask.png', 'LIESMICH.md'
 foreach ($f in $payload) { if (-not (Test-Path $f)) { throw "Datei fehlt: $f (zuerst .\build.ps1 ausführen)" } }
 
@@ -24,7 +25,7 @@ $verFile = Join-Path ([System.IO.Path]::GetTempPath()) "CyberWallpaper-version.t
 [System.IO.File]::WriteAllText($verFile, $Version)
 $res = @($payload | ForEach-Object { "/resource:$_,payload.$_" }) + "/resource:$verFile,version.txt"
 
-& $csc /nologo /target:winexe /optimize+ /codepage:65001 /out:CyberWallpaper-Setup.exe `
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 /out:CyberWallpaper-Setup.exe /win32icon:icon.ico /resource:icon.ico,app.ico `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
     @res Setup.cs Shared.cs
 

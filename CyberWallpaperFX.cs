@@ -1165,7 +1165,7 @@ namespace CyberWallpaperFX
             bool fatalHandled = false;
             var timer = new Timer(); timer.Interval = 1000 / Config.Fps;
             var tray = new NotifyIcon();
-            tray.Icon = SystemIcons.Application; tray.Text = "Cyber Wallpaper"; tray.Visible = true;
+            tray.Icon = AppIcon.Small(); tray.Text = "Cyber Wallpaper"; tray.Visible = true;
             var menu = new ContextMenuStrip();
             var miGui = menu.Items.Add("Hintergrund wählen …", null, (s, e) => ShowGui());
             miGui.Font = new Font(miGui.Font, FontStyle.Bold);

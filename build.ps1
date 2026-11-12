@@ -10,7 +10,7 @@ if (-not (Test-Path $csc)) {
 if (-not (Test-Path $csc)) { throw "csc.exe nicht gefunden." }
 
 # /codepage:65001 = Quelltext ist UTF-8 (sonst werden Umlaute in der Oberfläche falsch angezeigt)
-& $csc /nologo /target:winexe /optimize+ /codepage:65001 /out:CyberWallpaper.exe `
+& $csc /nologo /target:winexe /optimize+ /codepage:65001 /out:CyberWallpaper.exe /win32icon:icon.ico /resource:icon.ico,app.ico `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
     CyberWallpaperFX.cs MediaForm.cs Shared.cs
 

@@ -227,7 +227,7 @@ namespace CyberWallpaperSetup
             string installed = Product.InstalledDir();
             string oldVer = Product.InstalledVersion();
             Text = Product.Name + " – " + (installed != null ? "Aktualisieren" : "Installation");
-            Icon = SystemIcons.Application;
+            Icon = AppIcon.Full;
             FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(560, 410);

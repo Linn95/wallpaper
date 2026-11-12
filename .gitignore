@@ -1,0 +1,5 @@
+# Build-Ausgabe (mit build.ps1 neu erzeugbar)
+*.exe
+
+# Laufzeit-Logs
+*.log

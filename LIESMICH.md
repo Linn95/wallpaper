@@ -17,10 +17,11 @@ und starte das Programm neu. Am besten in Bildschirmauflösung oder größer.
 (WebP wird nicht direkt geladen -> vorher in PNG umwandeln.)
 
 ## Video statt Bild (Branch `feature/video`)
-Liegt ein Video unter `videos\test.mp4` (Pfad über `VideoFile` im `Config`-Block
-änderbar), läuft es als Hintergrund: stumm, in Endlosschleife, hardware-dekodiert über
-Windows Media Foundation (`IMFMediaEngine`). Fehlt die Datei oder schlägt die Wiedergabe
-fehl, läuft automatisch wieder das Bild-Wallpaper.
+Leg ein Video in den Ordner `videos\` und starte das Programm neu: Es nimmt automatisch
+das **neueste** Video dort (.mp4/.m4v/.mov/.mkv/.webm). Einen festen Pfad kannst du über
+`VideoFile` im `Config`-Block setzen (leer = automatisch). Das Video läuft stumm, in
+Endlosschleife, hardware-dekodiert über Windows Media Foundation (`IMFMediaEngine`).
+Ist kein Video da oder schlägt die Wiedergabe fehl, läuft automatisch wieder das Bild-Wallpaper.
 
 - Format: **MP4 mit H.264** (läuft auf jedem Windows ohne Zusatz-Codecs). H.265/HEVC
   und WebM brauchen eigene Erweiterungen aus dem Microsoft Store.

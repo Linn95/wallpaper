@@ -71,7 +71,8 @@ namespace CyberWallpaperFX
         // Ist die Datei vorhanden, läuft das Video (stumm, in Schleife); sonst das Bild-Wallpaper.
         // Bild-spezifische Effekte (Sonne, Stadt-/Wolkenlichter) sind im Videomodus aus.
         public const bool   UseVideo       = true;
-        public const string VideoFile      = "videos\\test.mp4";   // relativ zum Programmordner
+        public const string VideoFile      = "";                   // fester Pfad (relativ zum Programmordner); leer = automatisch
+        public const string VideoFolder    = "videos";             // automatisch: neuestes Video in diesem Ordner
         public const bool   VideoRain      = false;                // Regen auch über dem Video
         public const bool   VideoNeonPulse = false;                // Neon-Schimmer auch über dem Video
     }
@@ -234,8 +235,9 @@ namespace CyberWallpaperFX
         {
             try
             {
-                string videoPath = System.IO.Path.Combine(Application.StartupPath, Config.VideoFile);
-                videoMode = Config.UseVideo && System.IO.File.Exists(videoPath);
+                string videoPath = Config.UseVideo ? FindVideo() : null;
+                videoMode = videoPath != null;
+                L("Video-Datei: " + (videoMode ? System.IO.Path.GetFileName(videoPath) : "(keine)"));
                 int ofl;
                 // BGRA_SUPPORT (0x20) für Direct2D, VIDEO_SUPPORT (0x800) für die Media Engine
                 int hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, videoMode ? 0x820u : 0x20u, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
@@ -282,6 +284,31 @@ namespace CyberWallpaperFX
                 return true;
             }
             catch (Exception ex) { L("EX " + ex); return false; }
+        }
+
+        // Video wählen: fester Pfad (VideoFile), sonst das neueste Video im Ordner VideoFolder
+        static string FindVideo()
+        {
+            try
+            {
+                if (Config.VideoFile.Length > 0)
+                {
+                    string p = System.IO.Path.Combine(Application.StartupPath, Config.VideoFile);
+                    if (System.IO.File.Exists(p)) return p;
+                }
+                string dir = System.IO.Path.Combine(Application.StartupPath, Config.VideoFolder);
+                if (!System.IO.Directory.Exists(dir)) return null;
+                string best = null; DateTime bestT = DateTime.MinValue;
+                foreach (string f in System.IO.Directory.GetFiles(dir))
+                {
+                    string ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                    if (ext != ".mp4" && ext != ".m4v" && ext != ".mov" && ext != ".mkv" && ext != ".webm") continue;
+                    DateTime t = System.IO.File.GetLastWriteTime(f);
+                    if (best == null || t > bestT) { best = f; bestT = t; }
+                }
+                return best;
+            }
+            catch { return null; }
         }
 
         // Media Engine aufsetzen: dekodiert das Video per GPU in eine Textur (stumm, Endlosschleife)

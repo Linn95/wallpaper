@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -124,6 +125,7 @@ namespace CyberWallpaperFX
     static class Native
     {
         [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string n);
+        [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string c, string n);
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
         [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder s, int m);
         [DllImport("user32.dll")] public static extern IntPtr SetParent(IntPtr c, IntPtr p);
@@ -138,12 +140,29 @@ namespace CyberWallpaperFX
         public struct RECT { public int L, T, R, B; }
         static string Cls(IntPtr h) { var s = new StringBuilder(64); GetClassName(h, s, 64); return s.ToString(); }
         public static bool IsClass(IntPtr h, string name) { return Cls(h) == name; }
-        public static IntPtr GetWorkerWChild() {
-            IntPtr pm = FindWindow("Progman", null); IntPtr r;
-            SendMessageTimeout(pm, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out r);
+        // Sucht die Desktop-Ebene hinter den Icons, ohne etwas zu verändern (IntPtr.Zero = Explorer läuft nicht).
+        public static IntPtr FindHost() {
+            IntPtr pm = FindWindow("Progman", null);
+            if (pm == IntPtr.Zero) return IntPtr.Zero;
+            // Neues Layout (Windows 11 24H2+): WorkerW ist ein Kind von Progman
             IntPtr c = GetWindow(pm, 5);
             while (c != IntPtr.Zero) { if (Cls(c) == "WorkerW") return c; c = GetWindow(c, 2); }
+            // Klassisches Layout (Windows 10 / älteres Windows 11): Die Icons hängen in einem Top-Level-WorkerW,
+            // das nächste WorkerW dahinter ist die Wallpaper-Ebene.
+            IntPtr top = IntPtr.Zero;
+            while ((top = FindWindowEx(IntPtr.Zero, top, "WorkerW", null)) != IntPtr.Zero)
+                if (FindWindowEx(top, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero) {
+                    IntPtr ww = FindWindowEx(IntPtr.Zero, top, "WorkerW", null);
+                    if (ww != IntPtr.Zero) return ww;
+                }
             return pm;
+        }
+        // Wie FindHost, bittet Progman aber vorher, die WorkerW-Ebene anzulegen.
+        public static IntPtr GetWorkerWChild() {
+            IntPtr pm = FindWindow("Progman", null); IntPtr r;
+            if (pm == IntPtr.Zero) return IntPtr.Zero;
+            SendMessageTimeout(pm, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out r);
+            return FindHost();
         }
         public static void MakeChild(IntPtr h) {
             uint st = (uint)GetWindowLong(h, -16); st |= 0x40000000; st &= ~0x80000000u;
@@ -200,6 +219,28 @@ namespace CyberWallpaperFX
         public static T D<T>(IntPtr o, int slot) where T : class { return (T)(object)Marshal.GetDelegateForFunctionPointer(Vt(o, slot), typeof(T)); }
     }
 
+    // Protokoll in CyberWallpaper.log neben der EXE. Ein normaler Start beginnt eine neue Datei;
+    // nach einem automatischen Neustart wird angehängt, damit der Grund des Neustarts erhalten bleibt.
+    static class Log
+    {
+        public static bool Keep;
+        static bool started;
+        public static string FilePath { get { return System.IO.Path.Combine(Application.StartupPath, "CyberWallpaper.log"); } }
+        public static void W(string s)
+        {
+            try
+            {
+                string p = FilePath;
+                string line = DateTime.Now.ToString("HH:mm:ss") + " " + s + Environment.NewLine;
+                bool append = started || Keep;
+                if (append && !started && System.IO.File.Exists(p) && new System.IO.FileInfo(p).Length > 256 * 1024) append = false;
+                if (append) System.IO.File.AppendAllText(p, line); else System.IO.File.WriteAllText(p, line);
+                started = true;
+            }
+            catch { }
+        }
+    }
+
     class WForm : Form
     {
         IntPtr device, ctx, swap, d2d, rt, brush, bg, vignetteBrush;
@@ -212,13 +253,17 @@ namespace CyberWallpaperFX
         readonly List<Drop> drops = new List<Drop>();
         readonly List<Spark> sparks = new List<Spark>();
         readonly List<Ember> embers = new List<Ember>();
-        double time; float neonT; float lightningT, nextLightning; float flash; int watch;
+        double time; float neonT; float lightningT, nextLightning; float flash;
         // Video
         bool videoMode, haveFrame, vSrcSet; int vFrames, vLogTick, vLogCount;
         IntPtr engine, videoTex, backTex, dxgiMgr, mfAttrs, notifyPtr;
         EngineNotify notify; NormRect vSrc;
         Api.CopyResource copyRes; Api.METick meTick; Api.METransfer meTransfer; Api.MENativeSize meSize;
-        readonly StringBuilder log = new StringBuilder();
+        // Stabilität: echte Frame-Zeit, Watchdog, Fehlererkennung
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        double lastT; float watchT; int failStreak; bool ready, handleLost;
+        public string Fatal;          // != null: Weiterzeichnen ist sinnlos -> Program startet die App neu
+        public bool ShuttingDown;     // gewolltes Beenden (kein Fehler)
         Guid IID_Surface = new Guid(0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
 
         public WForm(int ww, int hh) {
@@ -228,8 +273,15 @@ namespace CyberWallpaperFX
             SetStyle(ControlStyles.Opaque, true);
         }
         protected override void OnPaintBackground(PaintEventArgs e) { }
-        void L(string s) { log.AppendLine(s); try { System.IO.File.WriteAllText(
-            System.IO.Path.Combine(Application.StartupPath, "CyberWallpaper.log"), log.ToString()); } catch { } }
+        void L(string s) { Log.W(s); }
+
+        // Wird das WorkerW zerstört (Explorer-Neustart/-Absturz), reißt Windows unser Kindfenster mit.
+        // Die Swapchain hängt dann an einem toten Fenster -> als fatal melden, statt unsichtbar weiterzulaufen.
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            base.OnHandleDestroyed(e);
+            if (ready && !ShuttingDown) handleLost = true;
+        }
 
         public bool Init()
         {
@@ -281,6 +333,8 @@ namespace CyberWallpaperFX
                 InitEffects();
                 nextLightning = Rndf(Config.LightningEveryMinSec, Config.LightningEveryMaxSec);
                 L("Setup OK " + w + "x" + h + (videoMode ? " VIDEO" : " img " + imgW + "x" + imgH) + " lights=" + sparks.Count);
+                lastT = clock.Elapsed.TotalSeconds;
+                ready = true;
                 return true;
             }
             catch (Exception ex) { L("EX " + ex); return false; }
@@ -542,6 +596,7 @@ namespace CyberWallpaperFX
         public void Attach()
         {
             IntPtr hst = Native.GetWorkerWChild();
+            if (hst == IntPtr.Zero) return;   // Explorer läuft gerade nicht
             Native.SetParent(Handle, hst);
             Native.MakeChild(Handle);
             Native.SetWindowPos(Handle, new IntPtr(1), 0, 0, w, h, 0x0010 | 0x0040);
@@ -549,17 +604,30 @@ namespace CyberWallpaperFX
 
         public void Frame()
         {
-            if (rt == IntPtr.Zero) return;
+            if (rt == IntPtr.Zero || Fatal != null || ShuttingDown) return;
+            if (handleLost || !IsHandleCreated) { Fatal = "Fenster wurde zerstört (Explorer-Neustart?)"; return; }
 
-            // Watchdog: alle ~3 s prüfen, ob wir noch korrekt eingehängt sind, sonst neu einklinken
-            if (++watch >= 90)
+            // Echte Zeit seit dem letzten Frame: Der Timer tickt ungenau (meist später als 1/Fps),
+            // mit festem dt liefen die Animationen sonst zu langsam und ungleichmäßig.
+            double now = clock.Elapsed.TotalSeconds;
+            float dt = (float)(now - lastT); lastT = now;
+            if (dt <= 0f) dt = 1f / Config.Fps; else if (dt > 0.1f) dt = 0.1f;   // nach Hängern nicht springen
+            time += dt; neonT += dt;
+
+            // Watchdog: alle ~3 s prüfen, ob wir noch in der richtigen Ebene hängen und die Größe noch stimmt
+            watchT += dt;
+            if (watchT >= 3f)
             {
-                watch = 0;
-                IntPtr par = Native.GetParent(Handle);
-                if (par == IntPtr.Zero || !Native.IsClass(par, "WorkerW")) Attach();
+                watchT = 0f;
+                IntPtr want = Native.FindHost();
+                if (want != IntPtr.Zero)
+                {
+                    if (Native.GetParent(Handle) != want) Attach();
+                    Native.RECT rc;
+                    if (Native.GetClientRect(want, out rc) && rc.R > 0 && rc.B > 0 && (rc.R != w || rc.B != h))
+                    { Fatal = "Desktop-Größe geändert: " + w + "x" + h + " -> " + rc.R + "x" + rc.B; return; }
+                }
             }
-
-            float dt = 1f / Config.Fps; time += dt; neonT += dt;
 
             // Video: neues Bild in die Zwischentextur holen, dann jeden Frame in den Backbuffer kopieren
             // (Flip-Swapchain verwirft den Inhalt nach Present, daher auch ohne neues Bild kopieren)
@@ -690,19 +758,61 @@ namespace CyberWallpaperFX
                 fillR(rt, ref full, vignetteBrush);
             }
 
-            end(rt, IntPtr.Zero, IntPtr.Zero);
-            present(swap, 1, 0);
+            int hrEnd = end(rt, IntPtr.Zero, IntPtr.Zero);
+            int hrPresent = present(swap, 1, 0);
+            if (hrEnd < 0 || hrPresent < 0)
+            {
+                // Grafikgerät verloren (Treiber-Update, GPU-Wechsel ...) -> sofort; andere Fehler erst, wenn sie anhalten
+                if (IsDeviceLost(hrEnd) || IsDeviceLost(hrPresent) || ++failStreak >= 60)
+                    Fatal = "Zeichnen fehlgeschlagen: EndDraw 0x" + hrEnd.ToString("X8") + " Present 0x" + hrPresent.ToString("X8");
+            }
+            else failStreak = 0;
+        }
+
+        static bool IsDeviceLost(int hr)
+        {
+            return hr == unchecked((int)0x8899000C)    // D2DERR_RECREATE_TARGET
+                || hr == unchecked((int)0x887A0005)    // DXGI_ERROR_DEVICE_REMOVED
+                || hr == unchecked((int)0x887A0006)    // DXGI_ERROR_DEVICE_HUNG
+                || hr == unchecked((int)0x887A0007)    // DXGI_ERROR_DEVICE_RESET
+                || hr == unchecked((int)0x887A0020);   // DXGI_ERROR_DRIVER_INTERNAL_ERROR
         }
     }
 
     static class Program
     {
+        const int MaxRestarts = 5;   // so viele schnelle Neustarts hintereinander, dann aufgeben
+        static readonly Stopwatch uptime = Stopwatch.StartNew();
+
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
+        {
+            int restarts = 0;
+            foreach (string a in args)
+                if (a.StartsWith("/restart:")) int.TryParse(a.Substring(9), out restarts);
+            Log.Keep = restarts > 0;
+
+            // Nur eine Instanz: Ein zweiter Start würde ein zweites Wallpaper darüberlegen.
+            // Nach einem automatischen Neustart kurz warten, bis die alte Instanz beendet ist.
+            bool owned;
+            var mutex = new System.Threading.Mutex(false, "Local\\CyberWallpaperFX");
+            try { owned = mutex.WaitOne(restarts > 0 ? 10000 : 0); }
+            catch (System.Threading.AbandonedMutexException) { owned = true; }
+            if (!owned) return;
+            try { Run(restarts); }
+            finally { mutex.ReleaseMutex(); }
+        }
+
+        static void Run(int restarts)
         {
             Native.SetProcessDPIAware();
             Application.EnableVisualStyles();
+            if (restarts > 0) { Log.W("--- Neustart " + restarts + " ---"); System.Threading.Thread.Sleep(1500); }
+
+            // Auf den Desktop warten (direkt nach der Anmeldung oder einem Explorer-Neustart ist er noch nicht da)
+            for (int i = 0; i < 240 && Native.FindWindow("Progman", null) == IntPtr.Zero; i++) System.Threading.Thread.Sleep(250);
             IntPtr host = Native.GetWorkerWChild();
+            if (host == IntPtr.Zero) { GiveUp("Der Windows-Desktop (Explorer) wurde nicht gefunden."); return; }
             Native.RECT rc; int w = 1920, h = 1080;
             if (Native.GetClientRect(host, out rc) && rc.R > 0 && rc.B > 0) { w = rc.R; h = rc.B; }
 
@@ -712,20 +822,60 @@ namespace CyberWallpaperFX
             Native.MakeChild(f.Handle);
             Native.SetWindowPos(f.Handle, new IntPtr(1), 0, 0, w, h, 0x0010 | 0x0040);
 
+            if (!f.Init())
+            {
+                // Kein totes Fenster über dem Desktop stehen lassen
+                f.ShuttingDown = true; f.Dispose();
+                if (restarts > 0 && restarts < MaxRestarts)
+                {   // nach einem Neustart (z. B. Treiber-Update) ist das Grafikgerät evtl. noch nicht wieder da -> später erneut
+                    System.Threading.Thread.Sleep(2000 * restarts);
+                    Relaunch(restarts + 1);
+                }
+                else GiveUp("Das Wallpaper konnte nicht gestartet werden.");
+                return;
+            }
+
+            string restartReason = null;
+            var timer = new Timer(); timer.Interval = 1000 / Config.Fps;
             var tray = new NotifyIcon();
             tray.Icon = SystemIcons.Application; tray.Text = "Cyber Wallpaper"; tray.Visible = true;
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Beenden", null, (s, e) => { tray.Visible = false; Application.Exit(); });
+            menu.Items.Add("Beenden", null, (s, e) => { timer.Stop(); f.ShuttingDown = true; tray.Visible = false; Application.Exit(); });
             tray.ContextMenuStrip = menu;
 
-            if (f.Init())
+            timer.Tick += (s, e) =>
             {
-                var timer = new Timer(); timer.Interval = 1000 / Config.Fps;
-                timer.Tick += (s, e) => f.Frame();
-                timer.Start();
-            }
+                f.Frame();
+                if (f.Fatal != null && restartReason == null)
+                {
+                    restartReason = f.Fatal;
+                    timer.Stop(); f.ShuttingDown = true; tray.Visible = false; Application.Exit();
+                }
+            };
+            timer.Start();
             Application.Run();
             tray.Dispose();
+
+            if (restartReason != null)
+            {
+                Log.W("Neustart nötig: " + restartReason);
+                // Lief die App schon länger stabil, zählt das als neuer Vorfall; sonst hochzählen (Schutz vor Endlosschleife)
+                int n = uptime.Elapsed.TotalSeconds > 60 ? 1 : restarts + 1;
+                if (n > MaxRestarts) GiveUp("Das Wallpaper musste zu oft hintereinander neu starten.\nLetzter Grund: " + restartReason);
+                else Relaunch(n);
+            }
+        }
+
+        static void Relaunch(int n)
+        {
+            try { Process.Start(Application.ExecutablePath, "/restart:" + n); }
+            catch (Exception ex) { Log.W("Neustart fehlgeschlagen: " + ex.Message); }
+        }
+
+        static void GiveUp(string msg)
+        {
+            Log.W("Abbruch: " + msg);
+            MessageBox.Show(msg + "\n\nDetails stehen in:\n" + Log.FilePath, "Cyber Wallpaper", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 }

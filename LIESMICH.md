@@ -60,4 +60,14 @@ Neu bauen (PowerShell im Projektordner):
 
 ## Grenzen
 - Primär auf den Hauptmonitor ausgelegt.
-- Nach einem Explorer-Neustart das Wallpaper neu starten.
+- Entwickelt auf Windows 11 (aktueller Build). Für Windows 10 / ältere Windows-11-Builds gibt es eine
+  Suche nach der klassischen WorkerW-Ebene, die aber ungetestet ist.
+
+## Stabilität
+- **Selbstheilung:** Nach einem Explorer-Neustart, einem Grafiktreiber-Update oder einer geänderten
+  Bildschirmauflösung startet sich das Wallpaper automatisch neu (Grund steht in `CyberWallpaper.log`).
+  Nach 5 erfolglosen Neustarts in Folge gibt es mit einer Meldung auf.
+- **Nur eine Instanz:** Ein zweiter Start tut nichts, solange das Wallpaper läuft. Zum Neustarten
+  (z. B. nach einem neuen Video) erst über das Tray-Icon beenden.
+- Schlägt der Start fehl, erscheint eine Meldung mit dem Pfad zur Log-Datei; es bleibt kein
+  leeres Fenster über dem Desktop stehen.

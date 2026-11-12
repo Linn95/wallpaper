@@ -15,4 +15,4 @@ if (-not (Test-Path $csc)) { throw "csc.exe nicht gefunden." }
     CyberWallpaperFX.cs MediaForm.cs
 
 if ($LASTEXITCODE -eq 0) { Write-Host "OK -> CyberWallpaper.exe gebaut." }
-else { Write-Host "Build fehlgeschlagen (Exit $LASTEXITCODE)." }
+else { Write-Host "Build fehlgeschlagen (Exit $LASTEXITCODE)."; exit $LASTEXITCODE }

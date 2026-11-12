@@ -11,7 +11,7 @@ Doppelklick auf `CyberWallpaper.exe`.
 ## Beenden
 Rechtsklick auf das Tray-Icon (unten rechts bei der Uhr) -> **Beenden**.
 
-## Hintergrund wählen (Oberfläche, Branch `GUI`)
+## Hintergrund wählen (Oberfläche)
 Öffnen auf einem dieser Wege:
 - Rechtsklick aufs Tray-Icon -> **Hintergrund wählen …**
 - Doppelklick aufs Tray-Icon
@@ -36,7 +36,7 @@ Lege dein Wunschbild als `background.png` in diesen Ordner (überschreibt das ak
 und starte das Programm neu. Am besten in Bildschirmauflösung oder größer.
 (WebP wird nicht direkt geladen -> vorher in PNG umwandeln.)
 
-## Video statt Bild (Branch `feature/video`)
+## Video statt Bild
 Leg ein Video in den Ordner `videos\` und starte das Programm neu: Es nimmt automatisch
 das **neueste** Video dort (.mp4/.m4v/.mov/.mkv/.webm). Einen festen Pfad kannst du über
 `VideoFile` im `Config`-Block setzen (leer = automatisch). Das Video läuft stumm, in
@@ -82,4 +82,15 @@ Neu bauen (PowerShell im Projektordner):
 
 ## Grenzen
 - Primär auf den Hauptmonitor ausgelegt.
-- Nach einem Explorer-Neustart das Wallpaper neu starten.
+- Entwickelt auf Windows 11 (aktueller Build). Für Windows 10 / ältere Windows-11-Builds gibt es eine
+  Suche nach der klassischen WorkerW-Ebene, die aber ungetestet ist.
+
+## Stabilität
+- **Selbstheilung:** Nach einem Explorer-Neustart, einem Grafiktreiber-Update oder einer geänderten
+  Bildschirmauflösung startet sich das Wallpaper automatisch neu (Grund steht in `CyberWallpaper.log`).
+  Nach 5 erfolglosen Neustarts in Folge gibt es mit einer Meldung auf.
+- **Nur eine Instanz:** Ein zweiter Start legt kein zweites Wallpaper darüber, sondern öffnet die
+  Oberfläche im laufenden. Neue Videos lassen sich dort ohne Neustart auswählen.
+- Nach einem automatischen Neustart läuft wieder der zuletzt gewählte Hintergrund (`settings.txt`).
+- Schlägt der Start fehl, erscheint eine Meldung mit dem Pfad zur Log-Datei; es bleibt kein
+  leeres Fenster über dem Desktop stehen.

@@ -66,6 +66,14 @@ namespace CyberWallpaperFX
         // --- Vignette ---
         public const bool  Vignette      = true;
         public const float VignetteStrength = 0.55f;
+
+        // --- Video-Hintergrund (statt Bild) ---
+        // Ist die Datei vorhanden, läuft das Video (stumm, in Schleife); sonst das Bild-Wallpaper.
+        // Bild-spezifische Effekte (Sonne, Stadt-/Wolkenlichter) sind im Videomodus aus.
+        public const bool   UseVideo       = true;
+        public const string VideoFile      = "videos\\test.mp4";   // relativ zum Programmordner
+        public const bool   VideoRain      = false;                // Regen auch über dem Video
+        public const bool   VideoNeonPulse = false;                // Neon-Schimmer auch über dem Video
     }
 
     class Drop { public float X, Y, Spd, Len, A; }
@@ -86,6 +94,31 @@ namespace CyberWallpaperFX
     [StructLayout(LayoutKind.Sequential)] struct GradStop { public float Pos; public ColorF Color; }
     [StructLayout(LayoutKind.Sequential)] struct RTProps { public int Type, Format, Alpha; public float DpiX, DpiY; public int Usage, MinLevel; }
     [StructLayout(LayoutKind.Sequential)] struct RadialProps { public D2Point Center, Offset; public float Rx, Ry; }
+
+    // --- Video (Media Foundation) ---
+    [StructLayout(LayoutKind.Sequential)] struct Tex2DDesc {
+        public uint Width, Height, MipLevels, ArraySize; public int Format;
+        public uint SampleCount, SampleQuality; public int Usage; public uint BindFlags, CPUAccessFlags, MiscFlags;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct NormRect { public float L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential)] struct IRect { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential)] struct MFARGB { public byte B, G, R, A; }
+
+    // Rückruf-Schnittstelle der Media Engine (muss public + ComVisible sein, damit .NET einen COM-Wrapper erzeugt)
+    [ComVisible(true), Guid("fee7c112-e776-42b5-9bbf-0048524e2bd5"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IMFMediaEngineNotify { [PreserveSig] int EventNotify(uint evt, UIntPtr param1, uint param2); }
+
+    [ComVisible(true), ClassInterface(ClassInterfaceType.None)]
+    public class EngineNotify : IMFMediaEngineNotify
+    {
+        public volatile int LastEvent, ErrorCode, ErrorHr;
+        public int EventNotify(uint evt, UIntPtr param1, uint param2)
+        {
+            LastEvent = (int)evt;
+            if (evt == 5) { ErrorCode = (int)param1.ToUInt32(); ErrorHr = unchecked((int)param2); }   // MF_MEDIA_ENGINE_EVENT_ERROR
+            return 0;
+        }
+    }
 
     static class Native
     {
@@ -141,6 +174,27 @@ namespace CyberWallpaperFX
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate void SetAA(IntPtr s, int mode);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate void SetColor(IntPtr s, ref ColorF c);
 
+        // --- Video: Media Foundation / Media Engine ---
+        [DllImport("mfplat.dll")] public static extern int MFStartup(uint version, uint flags);
+        [DllImport("mfplat.dll")] public static extern int MFCreateDXGIDeviceManager(out uint resetToken, out IntPtr manager);
+        [DllImport("mfplat.dll")] public static extern int MFCreateAttributes(out IntPtr attrs, uint initialSize);
+        [DllImport("ole32.dll")]  public static extern int CoInitializeEx(IntPtr reserved, uint coinit);
+        [DllImport("ole32.dll")]  public static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint ctx, ref Guid iid, out IntPtr ppv);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  CreateTexture2D(IntPtr s, ref Tex2DDesc d, IntPtr init, out IntPtr tex);   // ID3D11Device 5
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate void CopyResource(IntPtr s, IntPtr dst, IntPtr src);                         // ID3D11DeviceContext 47
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  SetMTProtected(IntPtr s, int on);                                        // ID3D10Multithread 5
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  ResetDevice(IntPtr s, IntPtr dev, uint token);                           // IMFDXGIDeviceManager 7
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  AttrSetUINT32(IntPtr s, ref Guid key, uint v);                           // IMFAttributes 21
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  AttrSetUnknown(IntPtr s, ref Guid key, IntPtr unk);                      // IMFAttributes 27
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  MECreateInstance(IntPtr s, uint flags, IntPtr attrs, out IntPtr engine);  // IMFMediaEngineClassFactory 3
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  MESetSource(IntPtr s, [MarshalAs(UnmanagedType.BStr)] string url);      // IMFMediaEngine 6
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  MESetBool(IntPtr s, int v);                                              // SetAutoPlay 29 / SetLoop 31 / SetMuted 35
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  MEPlay(IntPtr s);                                                        // IMFMediaEngine 32
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  MENativeSize(IntPtr s, out uint cx, out uint cy);                        // IMFMediaEngine 40
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  METransfer(IntPtr s, IntPtr dst, ref NormRect src, ref IRect dstRect, ref MFARGB border); // 43
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  METick(IntPtr s, out long pts);                                          // IMFMediaEngine 44
+
         public static IntPtr Vt(IntPtr o, int slot) { return Marshal.ReadIntPtr(Marshal.ReadIntPtr(o), slot * IntPtr.Size); }
         public static T D<T>(IntPtr o, int slot) where T : class { return (T)(object)Marshal.GetDelegateForFunctionPointer(Vt(o, slot), typeof(T)); }
     }
@@ -158,6 +212,11 @@ namespace CyberWallpaperFX
         readonly List<Spark> sparks = new List<Spark>();
         readonly List<Ember> embers = new List<Ember>();
         double time; float neonT; float lightningT, nextLightning; float flash; int watch;
+        // Video
+        bool videoMode, haveFrame, vSrcSet; int vFrames, vLogTick, vLogCount;
+        IntPtr engine, videoTex, backTex, dxgiMgr, mfAttrs, notifyPtr;
+        EngineNotify notify; NormRect vSrc;
+        Api.CopyResource copyRes; Api.METick meTick; Api.METransfer meTransfer; Api.MENativeSize meSize;
         readonly StringBuilder log = new StringBuilder();
         Guid IID_Surface = new Guid(0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
 
@@ -175,9 +234,18 @@ namespace CyberWallpaperFX
         {
             try
             {
+                string videoPath = System.IO.Path.Combine(Application.StartupPath, Config.VideoFile);
+                videoMode = Config.UseVideo && System.IO.File.Exists(videoPath);
                 int ofl;
-                int hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
-                L("D3D11 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                // BGRA_SUPPORT (0x20) für Direct2D, VIDEO_SUPPORT (0x800) für die Media Engine
+                int hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, videoMode ? 0x820u : 0x20u, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
+                if (hr != 0 && videoMode)
+                {
+                    L("D3D11 mit Video-Support 0x" + hr.ToString("X8") + " -> ohne");
+                    videoMode = false;
+                    hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
+                }
+                L("D3D11 0x" + hr.ToString("X8") + " videoMode=" + videoMode); if (hr != 0) return false;
                 Guid iidF2 = new Guid(0x50c83a1c, 0xe072, 0x4c48, 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0);
                 IntPtr factory; hr = Api.CreateDXGIFactory2(0, ref iidF2, out factory); L("Factory 0x" + hr.ToString("X8")); if (hr != 0) return false;
                 var d = new SwapChainDesc1 { Width = (uint)w, Height = (uint)h, Format = 87, SampleCount = 1, BufferUsage = 0x20, BufferCount = 2, SwapEffect = 4 };
@@ -203,16 +271,90 @@ namespace CyberWallpaperFX
                 drawB   = Api.D<Api.DrawBitmap>(rt, 26);
                 setCol  = Api.D<Api.SetColor>(brush, 8);
 
-                LoadBackground();
+                if (videoMode && !InitVideo(videoPath)) { videoMode = false; L("Video fehlgeschlagen -> Bildmodus"); }
+                if (!videoMode) LoadBackground();
                 if (bg != IntPtr.Zero) { sunX = bgRect.L + Config.SunFx * (bgRect.R - bgRect.L); sunY = bgRect.T + Config.SunFy * (bgRect.B - bgRect.T); }
                 else { sunX = w * Config.SunFx; sunY = h * Config.SunFy; }
                 BuildVignette();
                 InitEffects();
                 nextLightning = Rndf(Config.LightningEveryMinSec, Config.LightningEveryMaxSec);
-                L("Setup OK " + w + "x" + h + " img " + imgW + "x" + imgH + " lights=" + sparks.Count);
+                L("Setup OK " + w + "x" + h + (videoMode ? " VIDEO" : " img " + imgW + "x" + imgH) + " lights=" + sparks.Count);
                 return true;
             }
             catch (Exception ex) { L("EX " + ex); return false; }
+        }
+
+        // Media Engine aufsetzen: dekodiert das Video per GPU in eine Textur (stumm, Endlosschleife)
+        bool InitVideo(string path)
+        {
+            try
+            {
+                int hr;
+                // Die Media Engine nutzt das D3D-Gerät aus eigenen Threads -> Multithread-Schutz an
+                Guid iidMT = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");   // ID3D10Multithread
+                IntPtr mt;
+                hr = Marshal.QueryInterface(device, ref iidMT, out mt); L("MT 0x" + hr.ToString("X8"));
+                if (hr == 0) { Api.D<Api.SetMTProtected>(mt, 5)(mt, 1); Marshal.Release(mt); }
+
+                hr = Api.MFStartup(0x00020070, 0); L("MFStartup 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                uint token;
+                hr = Api.MFCreateDXGIDeviceManager(out token, out dxgiMgr); L("DXGIMgr 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                hr = Api.D<Api.ResetDevice>(dxgiMgr, 7)(dxgiMgr, device, token); L("ResetDevice 0x" + hr.ToString("X8")); if (hr != 0) return false;
+
+                hr = Api.MFCreateAttributes(out mfAttrs, 3); L("Attrs 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                notify = new EngineNotify();
+                notifyPtr = Marshal.GetComInterfaceForObject(notify, typeof(IMFMediaEngineNotify));
+                Guid kCallback = new Guid("c60381b8-83a4-41f8-a3d0-de05076849a9");   // MF_MEDIA_ENGINE_CALLBACK
+                Guid kDxgiMgr  = new Guid("065702da-1094-486d-8617-ee7cc4ee4648");   // MF_MEDIA_ENGINE_DXGI_MANAGER
+                Guid kOutFmt   = new Guid("5066893c-8cf9-42bc-8b8a-472212e52726");   // MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT
+                var setUnk = Api.D<Api.AttrSetUnknown>(mfAttrs, 27);
+                var setU32 = Api.D<Api.AttrSetUINT32>(mfAttrs, 21);
+                hr = setUnk(mfAttrs, ref kCallback, notifyPtr); L("Attr Callback 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                hr = setUnk(mfAttrs, ref kDxgiMgr, dxgiMgr);     L("Attr DXGI 0x" + hr.ToString("X8"));     if (hr != 0) return false;
+                hr = setU32(mfAttrs, ref kOutFmt, 87);           L("Attr Format 0x" + hr.ToString("X8"));   if (hr != 0) return false;   // B8G8R8A8
+
+                Api.CoInitializeEx(IntPtr.Zero, 2);   // STA (bereits aktiv -> harmlos)
+                Guid clsidFac = new Guid("B44392DA-499B-446b-A4CB-005FEAD0E6D5");   // CLSID_MFMediaEngineClassFactory
+                Guid iidFac   = new Guid("4D645ACE-26AA-4688-9BE1-DF3516990B93");   // IID_IMFMediaEngineClassFactory
+                IntPtr fac;
+                hr = Api.CoCreateInstance(ref clsidFac, IntPtr.Zero, 1, ref iidFac, out fac); L("Factory 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                hr = Api.D<Api.MECreateInstance>(fac, 3)(fac, 0, mfAttrs, out engine); L("Engine 0x" + hr.ToString("X8"));
+                Marshal.Release(fac);
+                if (hr != 0) return false;
+
+                Api.D<Api.MESetBool>(engine, 35)(engine, 1);   // SetMuted
+                Api.D<Api.MESetBool>(engine, 31)(engine, 1);   // SetLoop
+                Api.D<Api.MESetBool>(engine, 29)(engine, 1);   // SetAutoPlay
+                hr = Api.D<Api.MESetSource>(engine, 6)(engine, path); L("SetSource 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                hr = Api.D<Api.MEPlay>(engine, 32)(engine);           L("Play 0x" + hr.ToString("X8"));
+
+                // Zwischentextur in Bildschirmgröße: Ziel für neue Videobilder, wird jeden Frame in den Backbuffer kopiert
+                var td = new Tex2DDesc { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = 87,
+                                         SampleCount = 1, SampleQuality = 0, Usage = 0, BindFlags = 0x20 | 0x8 };   // RENDER_TARGET | SHADER_RESOURCE
+                hr = Api.D<Api.CreateTexture2D>(device, 5)(device, ref td, IntPtr.Zero, out videoTex); L("VideoTex 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                Guid iidTex2D = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+                hr = Api.D<Api.GetBuffer>(swap, 9)(swap, 0, ref iidTex2D, out backTex); L("BackTex 0x" + hr.ToString("X8")); if (hr != 0) return false;
+
+                copyRes    = Api.D<Api.CopyResource>(ctx, 47);
+                meTick     = Api.D<Api.METick>(engine, 44);
+                meTransfer = Api.D<Api.METransfer>(engine, 43);
+                meSize     = Api.D<Api.MENativeSize>(engine, 40);
+                vSrc = new NormRect { L = 0, T = 0, R = 1, B = 1 };
+                return true;
+            }
+            catch (Exception ex) { L("Video EX " + ex); return false; }
+        }
+
+        // "Cover"-Zuschnitt: Video füllt den Bildschirm, überstehender Rand wird abgeschnitten
+        void ComputeVideoCrop()
+        {
+            uint vw, vh;
+            if (meSize(engine, out vw, out vh) != 0 || vw == 0 || vh == 0) return;
+            float sa = (float)w / h, va = (float)vw / vh;
+            if (va > sa) { float f = sa / va; vSrc = new NormRect { L = (1 - f) / 2, T = 0, R = (1 + f) / 2, B = 1 }; }
+            else         { float f = va / sa; vSrc = new NormRect { L = 0, T = (1 - f) / 2, R = 1, B = (1 + f) / 2 }; }
+            vSrcSet = true;
+            L("Video nativ " + vw + "x" + vh);
         }
 
         void LoadBackground()
@@ -261,7 +403,7 @@ namespace CyberWallpaperFX
 
         void InitEffects()
         {
-            if (Config.Rain)
+            if (Config.Rain && (!videoMode || Config.VideoRain))
                 for (int i = 0; i < Config.RainCount; i++)
                     drops.Add(new Drop { X = Rndf(0, w), Y = Rndf(0, h), Spd = Rndf(Config.RainSpeedMin, Config.RainSpeedMax), Len = Rndf(Config.RainLenMin, Config.RainLenMax), A = Rndf(0.07f, 0.22f) });
 
@@ -392,15 +534,39 @@ namespace CyberWallpaperFX
 
             float dt = 1f / Config.Fps; time += dt; neonT += dt;
 
+            // Video: neues Bild in die Zwischentextur holen, dann jeden Frame in den Backbuffer kopieren
+            // (Flip-Swapchain verwirft den Inhalt nach Present, daher auch ohne neues Bild kopieren)
+            if (videoMode)
+            {
+                long pts;
+                if (meTick(engine, out pts) == 0)   // S_OK = neues Videobild bereit
+                {
+                    if (!vSrcSet) ComputeVideoCrop();
+                    var dst = new IRect { L = 0, T = 0, R = w, B = h };
+                    var border = new MFARGB { A = 255 };
+                    if (meTransfer(engine, videoTex, ref vSrc, ref dst, ref border) == 0) { haveFrame = true; vFrames++; }
+                }
+                if (haveFrame) copyRes(ctx, backTex, videoTex);
+                if (vLogCount < 10 && ++vLogTick >= Config.Fps * 3)   // die ersten 30 s alle 3 s protokollieren
+                {
+                    vLogTick = 0; vLogCount++;
+                    L("Video: Bilder=" + vFrames + " letztesEvent=" + notify.LastEvent
+                      + (notify.ErrorHr != 0 ? " FEHLER code=" + notify.ErrorCode + " hr=0x" + notify.ErrorHr.ToString("X8") : ""));
+                }
+            }
+
             begin(rt);
-            var black = new ColorF { A = 1 };
-            clear(rt, ref black);
+            if (!videoMode || !haveFrame)
+            {
+                var black = new ColorF { A = 1 };
+                clear(rt, ref black);
+            }
 
             // Hintergrundbild (Cover)
             if (bg != IntPtr.Zero) drawB(rt, bg, ref bgRect, 1f, 1, IntPtr.Zero);
 
             // Neon-Schimmer (atmender Farbstich)
-            if (Config.NeonPulse)
+            if (Config.NeonPulse && (!videoMode || Config.VideoNeonPulse))
             {
                 float p = (float)(0.5 + 0.5 * Math.Sin(time * 0.6));
                 float a = Config.NeonPulseMax * (0.4f + 0.6f * p);
@@ -411,7 +577,7 @@ namespace CyberWallpaperFX
             }
 
             // Sonne am Horizont: pulsierender Schein + langsam rotierende Lichtstrahlen
-            if (Config.Sun)
+            if (Config.Sun && !videoMode)   // Sonne ist auf das Bild positioniert -> im Videomodus aus
             {
                 float pulse = 0.82f + 0.18f * (float)Math.Sin(time * 1.1);
                 float[] sc = Config.SunColor;

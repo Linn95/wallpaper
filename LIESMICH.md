@@ -16,6 +16,21 @@ Lege dein Wunschbild als `background.png` in diesen Ordner (überschreibt das ak
 und starte das Programm neu. Am besten in Bildschirmauflösung oder größer.
 (WebP wird nicht direkt geladen -> vorher in PNG umwandeln.)
 
+## Video statt Bild (Branch `feature/video`)
+Liegt ein Video unter `videos\test.mp4` (Pfad über `VideoFile` im `Config`-Block
+änderbar), läuft es als Hintergrund: stumm, in Endlosschleife, hardware-dekodiert über
+Windows Media Foundation (`IMFMediaEngine`). Fehlt die Datei oder schlägt die Wiedergabe
+fehl, läuft automatisch wieder das Bild-Wallpaper.
+
+- Format: **MP4 mit H.264** (läuft auf jedem Windows ohne Zusatz-Codecs). H.265/HEVC
+  und WebM brauchen eigene Erweiterungen aus dem Microsoft Store.
+- Ideal: nahtlos loopender Clip in Bildschirmauflösung, 24–30 fps, ohne Tonspur.
+- Das Video wird auf den Bildschirm „gecovert" (füllt alles, Ränder werden abgeschnitten).
+- Im Videomodus sind die bild-spezifischen Effekte (Sonne, Stadt-/Wolkenlichter) aus.
+  Regen und Neon-Schimmer lassen sich mit `VideoRain` / `VideoNeonPulse` zuschalten.
+- `UseVideo = false` erzwingt den Bildmodus.
+- Videos sind per `.gitignore` vom Repo ausgeschlossen (zu groß) und liegen nur lokal.
+
 ## Effekte / Aussehen anpassen
 Oben in `CyberWallpaperFX.cs` im Block `Config` ändern, dann neu bauen. Wichtige Werte:
 

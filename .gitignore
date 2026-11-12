@@ -3,3 +3,8 @@
 
 # Laufzeit-Logs
 *.log
+
+# Videos (zu groß fürs Repo; lokal unter videos/ ablegen)
+*.mp4
+*.webm
+*.mov

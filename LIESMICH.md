@@ -3,10 +3,23 @@
 Animiertes Cyberpunk-Live-Wallpaper **hinter den Desktop-Icons**: ein Hintergrundbild
 mit animierten Effekten darüber (Regen, flackernde Stadtlichter, Neon-Schimmer,
 Lichtzucken, Vignette, Funken). Rendert per Direct3D 11 + Direct2D auf eine
-DXGI-Swapchain im WorkerW-Kindfenster. Keine Installation nötig.
+DXGI-Swapchain im WorkerW-Kindfenster.
+
+## Installieren
+Am einfachsten über den Installer **`CyberWallpaper-Setup.exe`** (hängt an jedem GitHub-Release):
+- Installiert nur für dich nach `%LOCALAPPDATA%\Programs\CyberWallpaper`, **keine Administratorrechte** nötig.
+- Optionen: **Mit Windows starten**, Verknüpfung auf dem Desktop, nach der Installation starten.
+- Legt einen Startmenü-Eintrag „Cyber Wallpaper" an und trägt sich in **Apps & Features** ein.
+- Nochmal ausführen = **Aktualisieren**; Videos und Einstellungen bleiben erhalten.
+- **Deinstallieren** über Apps & Features (oder `Deinstallieren.exe` im Programmordner). Du wirst gefragt,
+  ob deine Videos und Einstellungen mit gelöscht werden sollen.
+- Für Profis: `CyberWallpaper-Setup.exe /silent [/dir:Pfad] [/noautostart] [/desktop] [/nostart]`,
+  `Deinstallieren.exe /uninstall /silent [/purge]`.
+
+Ohne Installer geht es auch: das ZIP aus dem Release entpacken und `CyberWallpaper.exe` starten.
 
 ## Starten
-Doppelklick auf `CyberWallpaper.exe`.
+Startmenü → „Cyber Wallpaper" (bzw. Doppelklick auf `CyberWallpaper.exe`).
 
 ## Beenden
 Rechtsklick auf das Tray-Icon (unten rechts bei der Uhr) -> **Beenden**.
@@ -69,16 +82,21 @@ Neu bauen (PowerShell im Projektordner):
     .\build.ps1
 
 ## Automatisch mit Windows starten
-1. Win + R, `shell:startup`, Enter.
-2. Verknüpfung zu `CyberWallpaper.exe` in den Autostart-Ordner legen.
+In der Oberfläche den Button **Mit Windows starten: An/Aus** klicken (oder im Installer die Option
+setzen). Das trägt das Wallpaper in den Windows-Autostart ein (zu sehen im Task-Manager unter
+„Autostart-Apps"). Eine alte Verknüpfung im Autostart-Ordner (`shell:startup`) wird dabei automatisch
+entfernt, damit nichts doppelt startet.
 
 ## Dateien
 - `CyberWallpaper.exe`   – das Programm
 - `CyberWallpaperFX.cs`  – Quellcode (Rendering, Video, Wallpaper-Einbindung)
 - `MediaForm.cs`         – Quellcode der Oberfläche (Auswahl, Einstellungen)
+- `Shared.cs`            – gemeinsame Helfer (Autostart, Verknüpfungen, Titelleiste)
+- `Setup.cs`             – Quellcode des Installers/Deinstallers
 - `settings.txt`         – gespeicherte Auswahl (lokal, nicht im Repo)
 - `background.png`       – dein Hintergrundbild
-- `build.ps1`            – Build-Skript (nutzt den eingebauten C#-Compiler)
+- `build.ps1`            – baut `CyberWallpaper.exe` (nutzt den eingebauten C#-Compiler)
+- `build-setup.ps1`      – baut danach den Installer `CyberWallpaper-Setup.exe`
 
 ## Grenzen
 - Primär auf den Hauptmonitor ausgelegt.

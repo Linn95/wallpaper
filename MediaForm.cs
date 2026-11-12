@@ -120,10 +120,12 @@ namespace CyberWallpaperFX
         static readonly Color ColCyan    = Color.FromArgb(0, 214, 255);
         static readonly Color ColMagenta = Color.FromArgb(255, 60, 200);
         static readonly Color ColBad     = Color.FromArgb(255, 110, 110);
+        static readonly Color ColBorder  = Color.FromArgb(60, 40, 100);
 
         readonly WForm wall;
         readonly ListView list;
         readonly Label status;
+        readonly Button btnAuto;
         readonly Timer statusTimer;
         string flashMsg; bool flashBad; DateTime flashUntil;
         string lastCurrent = "";
@@ -148,7 +150,7 @@ namespace CyberWallpaperFX
             };
             var hint = new Label
             {
-                Text = "Doppelklick oder Anwenden wechselt sofort. Neue Videos einfach in den videos-Ordner legen oder über Hinzufügen auswählen.",
+                Text = "Doppelklick oder Anwenden wechselt sofort · neue Videos in den videos-Ordner legen oder hinzufügen",
                 Dock = DockStyle.Top, Height = 30, Padding = new Padding(16, 0, 8, 6),
                 ForeColor = ColDim, Font = new Font("Segoe UI", 9f), AutoEllipsis = true
             };
@@ -174,6 +176,7 @@ namespace CyberWallpaperFX
             };
             list.DrawItem += (s, e) => { e.DrawDefault = true; };
             list.DrawSubItem += (s, e) => { e.DrawDefault = true; };
+            list.SizeChanged += (s, e) => FitLastColumn();   // letzte Spalte füllt die Breite -> kein weißer Kopf-Rest
             list.DoubleClick += (s, e) => ApplySelected();
             list.KeyDown += (s, e) =>
             {
@@ -190,11 +193,14 @@ namespace CyberWallpaperFX
             var btnAdd    = MakeButton("Hinzufügen …", ColMagenta, false);
             var btnRemove = MakeButton("Entfernen", ColDim, false);
             var btnFolder = MakeButton("videos-Ordner öffnen", ColDim, false);
+            btnAuto       = MakeButton("Mit Windows starten", ColDim, false);
             btnApply.Click  += (s, e) => ApplySelected();
             btnAdd.Click    += (s, e) => AddFiles();
             btnRemove.Click += (s, e) => RemoveSelected();
             btnFolder.Click += (s, e) => OpenFolder();
-            bar.Controls.AddRange(new Control[] { btnApply, btnAdd, btnRemove, btnFolder });
+            btnAuto.Click   += (s, e) => ToggleAutostart();
+            bar.Controls.AddRange(new Control[] { btnApply, btnAdd, btnRemove, btnFolder, btnAuto });
+            UpdateAutoButton();
 
             status = new Label
             {
@@ -233,8 +239,46 @@ namespace CyberWallpaperFX
             return b;
         }
 
+        // Titelleiste in Programmfarbe (Windows 11)
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            TitleBar.Apply(Handle, ColBg, ColText, ColBorder);
+        }
+
+        // ---------- Autostart ----------
+        void UpdateAutoButton()
+        {
+            bool on = Autostart.IsEnabled();
+            btnAuto.Text = on ? "Mit Windows starten: An" : "Mit Windows starten: Aus";
+            btnAuto.FlatAppearance.BorderColor = on ? ColCyan : ColDim;
+            btnAuto.ForeColor = on ? ColCyan : ColText;
+        }
+
+        void ToggleAutostart()
+        {
+            try
+            {
+                if (Autostart.IsEnabled()) { Autostart.Disable(); Flash("Startet nicht mehr automatisch mit Windows.", false); }
+                else { Autostart.Enable(Application.ExecutablePath); Flash("Startet ab jetzt automatisch mit Windows.", false); }
+            }
+            catch (Exception ex) { Flash("Autostart konnte nicht geändert werden: " + ex.Message, true); }
+            UpdateAutoButton();
+        }
+
+        void FitLastColumn()
+        {
+            if (list.Columns.Count == 0) return;
+            int used = 0;
+            for (int i = 0; i < list.Columns.Count - 1; i++) used += list.Columns[i].Width;
+            int rest = list.ClientSize.Width - used;
+            ColumnHeader last = list.Columns[list.Columns.Count - 1];
+            if (rest > 60 && last.Width != rest) last.Width = rest;
+        }
+
         public void ShowAndActivate()
         {
+            UpdateAutoButton();   // könnte sich außerhalb geändert haben (z. B. durch den Installer)
             RefreshList();
             if (!Visible) Show();
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
@@ -265,6 +309,7 @@ namespace CyberWallpaperFX
                 if (selPath != null ? Media.SamePath(p, selPath) : isCur) { it.Selected = true; it.Focused = true; }
             }
             list.EndUpdate();
+            FitLastColumn();   // eine Scrollleiste ändert die nutzbare Breite
             if (list.SelectedItems.Count > 0) list.SelectedItems[0].EnsureVisible();
             lastCurrent = cur ?? "";
         }

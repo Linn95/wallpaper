@@ -12,7 +12,7 @@ if (-not (Test-Path $csc)) { throw "csc.exe nicht gefunden." }
 # /codepage:65001 = Quelltext ist UTF-8 (sonst werden Umlaute in der Oberfläche falsch angezeigt)
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 /out:CyberWallpaper.exe `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
-    CyberWallpaperFX.cs MediaForm.cs
+    CyberWallpaperFX.cs MediaForm.cs Shared.cs
 
 if ($LASTEXITCODE -eq 0) { Write-Host "OK -> CyberWallpaper.exe gebaut." }
 else { Write-Host "Build fehlgeschlagen (Exit $LASTEXITCODE)."; exit $LASTEXITCODE }

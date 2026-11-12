@@ -1,5 +1,5 @@
-# Baut CyberWallpaper.exe bei jedem Push.
-# Bei einem Tag wie v1.0.0 wird zusaetzlich ein GitHub-Release mit dem ZIP veroeffentlicht:
+# Baut CyberWallpaper.exe und den Installer CyberWallpaper-Setup.exe bei jedem Push.
+# Bei einem Tag wie v1.0.0 wird zusaetzlich ein GitHub-Release mit Installer und ZIP veroeffentlicht:
 #   git tag v1.0.0
 #   git push origin v1.0.0
 name: Build
@@ -24,6 +24,13 @@ jobs:
         shell: pwsh
         run: ./build.ps1
 
+      # Installer mit eingebettetem Programm; Version = Tag (z. B. v1.1.0) oder Branch + Commit
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "$env:GITHUB_REF_NAME-$($env:GITHUB_SHA.Substring(0,7))" }
+          ./build-setup.ps1 -Version $ver
+
       - name: ZIP packen
         shell: pwsh
         run: |
@@ -31,12 +38,17 @@ jobs:
           $files = 'CyberWallpaper.exe', 'background.png', 'city_mask.png', 'cloud_mask.png', 'LIESMICH.md'
           foreach ($f in $files) { if (-not (Test-Path $f)) { throw "Datei fehlt: $f" } }
           Compress-Archive -Path $files -DestinationPath "$name.zip"
+          $setup = if ($env:GITHUB_REF_TYPE -eq 'tag') { "CyberWallpaper-Setup-$env:GITHUB_REF_NAME.exe" } else { 'CyberWallpaper-Setup.exe' }
+          if ($setup -ne 'CyberWallpaper-Setup.exe') { Copy-Item CyberWallpaper-Setup.exe $setup }
           "ZIP_NAME=$name" >> $env:GITHUB_ENV
+          "SETUP_NAME=$setup" >> $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_NAME }}.zip
+          path: |
+            ${{ env.ZIP_NAME }}.zip
+            ${{ env.SETUP_NAME }}
           if-no-files-found: error
 
   release:
@@ -54,4 +66,4 @@ jobs:
       - name: Release veroeffentlichen
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/*.exe dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

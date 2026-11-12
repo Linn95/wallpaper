@@ -986,6 +986,7 @@ namespace CyberWallpaperFX
         {
             // /restart:<n>:<NeustartsDieseStunde>:<BeginnDesStundenfenstersUtcTicks>   /gui = Oberfläche wieder öffnen
             bool reopenGui = false;
+            bool fromAutostart = false;   // /autostart = vom Windows-Autostart gestartet
             foreach (string a in args)
             {
                 if (a.StartsWith("/restart:"))
@@ -996,6 +997,7 @@ namespace CyberWallpaperFX
                     if (p.Length > 2) long.TryParse(p[2], out hourStart);
                 }
                 else if (a == "/gui") reopenGui = true;
+                else if (a == "/autostart") fromAutostart = true;
             }
             Log.Keep = restarts > 0;
 
@@ -1008,7 +1010,8 @@ namespace CyberWallpaperFX
             catch (System.Threading.AbandonedMutexException) { owned = true; }
             if (!owned)
             {
-                if (restarts == 0)
+                // Läuft schon: beim Windows-Autostart still beenden, sonst die Oberfläche öffnen
+                if (restarts == 0 && !fromAutostart)
                 {
                     Native.AllowSetForegroundWindow(-1);   // laufender Instanz erlauben, ihr Fenster nach vorne zu holen
                     // Kurz wiederholen: Wechselt die laufende Instanz gerade (Neustart), gibt es das Event einen Moment nicht

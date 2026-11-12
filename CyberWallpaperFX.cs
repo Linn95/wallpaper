@@ -162,7 +162,8 @@ namespace CyberWallpaperFX
         public static IntPtr GetWorkerWChild() {
             IntPtr pm = FindWindow("Progman", null); IntPtr r;
             if (pm == IntPtr.Zero) return IntPtr.Zero;
-            SendMessageTimeout(pm, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out r);
+            // SMTO_ABORTIFHUNG (0x2): hängt Explorer, sofort zurückkehren statt den Aufrufer 1 s zu blockieren
+            SendMessageTimeout(pm, 0x052C, IntPtr.Zero, IntPtr.Zero, 0x0002, 1000, out r);
             return FindHost();
         }
         public static void MakeChild(IntPtr h) {
@@ -180,6 +181,8 @@ namespace CyberWallpaperFX
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  CreateSCForHwnd(IntPtr s, IntPtr dev, IntPtr hwnd, ref SwapChainDesc1 d, IntPtr fs, IntPtr rst, out IntPtr sc);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  GetBuffer(IntPtr s, uint b, ref Guid riid, out IntPtr o);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  Present(IntPtr s, uint sync, uint fl);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  ResizeBuffers(IntPtr s, uint count, uint w, uint h, int format, uint flags);   // IDXGISwapChain 13
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate void CtxVoid(IntPtr s);                                                         // ID3D11DeviceContext: ClearState 110 / Flush 111
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  CreateDxgiSurfaceRT(IntPtr s, IntPtr surf, ref RTProps p, out IntPtr rt);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  CreateSolidBrush(IntPtr s, ref ColorF c, IntPtr props, out IntPtr brush);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int  CreateBitmap(IntPtr s, SizeU size, IntPtr src, uint pitch, ref BitmapProps p, out IntPtr bmp);
@@ -265,7 +268,7 @@ namespace CyberWallpaperFX
         Api.MESetSource meSetSource; Api.MEPlay mePlay, mePause;
         // Stabilität: echte Frame-Zeit, Watchdog, Fehlererkennung
         readonly Stopwatch clock = Stopwatch.StartNew();
-        double lastT; float watchT; int failStreak; bool ready, handleLost;
+        double lastT; float watchT, watchEvery = 3f; int failStreak, attachFails; bool ready, handleLost;
         public string Fatal;          // != null: Weiterzeichnen ist sinnlos -> Program startet die App neu
         public bool ShuttingDown;     // gewolltes Beenden (kein Fehler)
         Guid IID_Surface = new Guid(0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
@@ -311,33 +314,19 @@ namespace CyberWallpaperFX
                 hr = Api.D<Api.CreateSCForHwnd>(factory, 15)(factory, device, Handle, ref d, IntPtr.Zero, IntPtr.Zero, out swap); L("Swap 0x" + hr.ToString("X8")); if (hr != 0) return false;
                 Guid iidD2D = new Guid(0x06152247, 0x6f50, 0x465a, 0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07);
                 hr = Api.D2D1CreateFactory(0, ref iidD2D, IntPtr.Zero, out d2d); L("D2D 0x" + hr.ToString("X8")); if (hr != 0) return false;
-                IntPtr surface; hr = Api.D<Api.GetBuffer>(swap, 9)(swap, 0, ref IID_Surface, out surface); L("Surf 0x" + hr.ToString("X8")); if (hr != 0) return false;
-                var pp = new RTProps { Format = 87, Alpha = 1, DpiX = 96, DpiY = 96 };
-                hr = Api.D<Api.CreateDxgiSurfaceRT>(d2d, 15)(d2d, surface, ref pp, out rt); L("RT 0x" + hr.ToString("X8")); if (hr != 0) return false;
-                Marshal.Release(surface);
-
-                Api.D<Api.SetAA>(rt, 32)(rt, 0);
-                var white = new ColorF { R = 1, G = 1, B = 1, A = 1 };
-                hr = Api.D<Api.CreateSolidBrush>(rt, 8)(rt, ref white, IntPtr.Zero, out brush); L("Brush 0x" + hr.ToString("X8")); if (hr != 0) return false;
-
                 present = Api.D<Api.Present>(swap, 8);
-                begin   = Api.D<Api.BeginDraw>(rt, 48);
-                end     = Api.D<Api.EndDraw>(rt, 49);
-                clear   = Api.D<Api.Clear>(rt, 47);
-                fillE   = Api.D<Api.FillEllipse>(rt, 21);
-                fillR   = Api.D<Api.FillRect>(rt, 17);
-                drawL   = Api.D<Api.DrawLine>(rt, 15);
-                drawB   = Api.D<Api.DrawBitmap>(rt, 26);
-                setCol  = Api.D<Api.SetColor>(brush, 8);
+                if (!CreateTarget()) return false;
 
                 BuildVignette();
                 InitEffects();
                 nextLightning = Rndf(Config.LightningEveryMinSec, Config.LightningEveryMaxSec);
-                string err = SwitchTo(startMedia);
+                // Beim Start nichts in settings.txt schreiben: Scheitert das gewählte Medium nur vorübergehend
+                // (z. B. Grafiktreiber direkt nach einem Neustart noch nicht bereit), bleibt die Auswahl erhalten.
+                string err = SwitchTo(startMedia, false);
                 if (err != null && !Media.SamePath(startMedia, Media.OriginalBackground))
                 {
-                    L("Start-Medium fehlgeschlagen (" + err + ") -> Standard-Bild");
-                    err = SwitchTo(Media.OriginalBackground);
+                    L("Start-Medium fehlgeschlagen (" + err + ") -> Standard-Bild (Auswahl bleibt gespeichert)");
+                    err = SwitchTo(Media.OriginalBackground, false);
                 }
                 L("Setup OK " + w + "x" + h + " | " + StatusText);
                 lastT = clock.Elapsed.TotalSeconds;
@@ -345,6 +334,89 @@ namespace CyberWallpaperFX
                 return true;
             }
             catch (Exception ex) { L("EX " + ex); return false; }
+        }
+
+        static void Rel(ref IntPtr p) { if (p != IntPtr.Zero) { Marshal.Release(p); p = IntPtr.Zero; } }
+
+        // Direct2D-Zeichenziel auf dem Backbuffer der Swapchain anlegen (beim Start und nach einer Größenänderung)
+        bool CreateTarget()
+        {
+            IntPtr surface;
+            int hr = Api.D<Api.GetBuffer>(swap, 9)(swap, 0, ref IID_Surface, out surface); L("Surf 0x" + hr.ToString("X8")); if (hr != 0) return false;
+            var pp = new RTProps { Format = 87, Alpha = 1, DpiX = 96, DpiY = 96 };
+            hr = Api.D<Api.CreateDxgiSurfaceRT>(d2d, 15)(d2d, surface, ref pp, out rt);
+            Marshal.Release(surface);
+            L("RT 0x" + hr.ToString("X8")); if (hr != 0) { rt = IntPtr.Zero; return false; }
+
+            Api.D<Api.SetAA>(rt, 32)(rt, 0);
+            var white = new ColorF { R = 1, G = 1, B = 1, A = 1 };
+            hr = Api.D<Api.CreateSolidBrush>(rt, 8)(rt, ref white, IntPtr.Zero, out brush); L("Brush 0x" + hr.ToString("X8")); if (hr != 0) return false;
+
+            begin   = Api.D<Api.BeginDraw>(rt, 48);
+            end     = Api.D<Api.EndDraw>(rt, 49);
+            clear   = Api.D<Api.Clear>(rt, 47);
+            fillE   = Api.D<Api.FillEllipse>(rt, 21);
+            fillR   = Api.D<Api.FillRect>(rt, 17);
+            drawL   = Api.D<Api.DrawLine>(rt, 15);
+            drawB   = Api.D<Api.DrawBitmap>(rt, 26);
+            setCol  = Api.D<Api.SetColor>(brush, 8);
+            return true;
+        }
+
+        // Zwischentextur in Bildschirmgröße (Ziel für neue Videobilder) + Backbuffer, in den sie jeden Frame kopiert wird
+        bool CreateVideoTextures()
+        {
+            var td = new Tex2DDesc { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = 87,
+                                     SampleCount = 1, SampleQuality = 0, Usage = 0, BindFlags = 0x20 | 0x8 };   // RENDER_TARGET | SHADER_RESOURCE
+            int hr = Api.D<Api.CreateTexture2D>(device, 5)(device, ref td, IntPtr.Zero, out videoTex); L("VideoTex 0x" + hr.ToString("X8")); if (hr != 0) return false;
+            Guid iidTex2D = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+            hr = Api.D<Api.GetBuffer>(swap, 9)(swap, 0, ref iidTex2D, out backTex); L("BackTex 0x" + hr.ToString("X8"));
+            return hr == 0;
+        }
+
+        // Desktop-Größe hat sich geändert (Auflösung, Monitor, Docking, RDP): Swapchain und alles Größenabhängige
+        // an Ort und Stelle neu aufbauen. Video läuft weiter, die Oberfläche bleibt offen.
+        // false = hat nicht geklappt -> der Aufrufer meldet Fatal und die App startet wie bisher neu.
+        bool ResizeTo(int nw, int nh)
+        {
+            try
+            {
+                L("Desktop-Größe geändert: " + w + "x" + h + " -> " + nw + "x" + nh);
+                // Alles freigeben, was am Backbuffer oder am alten Zeichenziel hängt – sonst lehnt ResizeBuffers ab
+                Rel(ref vignetteBrush); Rel(ref bg); Rel(ref brush); Rel(ref rt);
+                Rel(ref backTex); Rel(ref videoTex);
+                haveFrame = false;
+                Api.D<Api.CtxVoid>(ctx, 110)(ctx);   // ClearState
+                Api.D<Api.CtxVoid>(ctx, 111)(ctx);   // Flush: verzögerte Freigaben jetzt ausführen
+
+                w = nw; h = nh;
+                Native.SetWindowPos(Handle, new IntPtr(1), 0, 0, w, h, 0x0010 | 0x0040);
+                int hr = Api.D<Api.ResizeBuffers>(swap, 13)(swap, 0, (uint)w, (uint)h, 0, 0);   // 0 = Anzahl/Format beibehalten
+                L("ResizeBuffers 0x" + hr.ToString("X8")); if (hr != 0) return false;
+
+                if (!CreateTarget()) return false;
+                BuildVignette();
+                if (videoReady)
+                {
+                    if (!CreateVideoTextures()) return false;
+                    vSrcSet = false;   // Zuschnitt für das neue Seitenverhältnis neu berechnen
+                }
+                if (!videoMode && currentMedia.Length > 0)
+                {
+                    if (!LoadBackground(currentMedia)) return false;
+                    if (imageEffects)
+                    {
+                        sunX = bgRect.L + Config.SunFx * (bgRect.R - bgRect.L);
+                        sunY = bgRect.T + Config.SunFy * (bgRect.B - bgRect.T);
+                        BuildSparkles();
+                    }
+                }
+                foreach (var dp in drops) { dp.X = Rndf(0, w); dp.Y = Rndf(0, h); }
+                foreach (var em in embers) { em.X = Rndf(0, w); em.Y = Rndf(0, h); }
+                lastT = clock.Elapsed.TotalSeconds;   // der Neuaufbau soll nicht als Zeitsprung zählen
+                return true;
+            }
+            catch (Exception ex) { L("Resize EX " + ex); return false; }
         }
 
         // Video wählen: fester Pfad (VideoFile), sonst das neueste Video im Ordner VideoFolder
@@ -381,7 +453,8 @@ namespace CyberWallpaperFX
         }
 
         // Live auf ein anderes Medium wechseln. Rückgabe: null = ok, sonst Fehlermeldung.
-        public string SwitchTo(string path)
+        // remember = false: nur anzeigen, die gespeicherte Auswahl (settings.txt) nicht anfassen.
+        public string SwitchTo(string path, bool remember = true)
         {
             try
             {
@@ -414,7 +487,7 @@ namespace CyberWallpaperFX
                 else return "Dateityp wird nicht unterstützt";
 
                 currentMedia = path;
-                Settings.Current = path; Settings.Save();
+                if (remember) { Settings.Current = path; Settings.Save(); }
                 L("Gewechselt zu: " + System.IO.Path.GetFileName(path));
                 return null;
             }
@@ -482,12 +555,7 @@ namespace CyberWallpaperFX
                 Api.D<Api.MESetBool>(engine, 31)(engine, 1);   // SetLoop
                 Api.D<Api.MESetBool>(engine, 29)(engine, 1);   // SetAutoPlay
 
-                // Zwischentextur in Bildschirmgröße: Ziel für neue Videobilder, wird jeden Frame in den Backbuffer kopiert
-                var td = new Tex2DDesc { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = 87,
-                                         SampleCount = 1, SampleQuality = 0, Usage = 0, BindFlags = 0x20 | 0x8 };   // RENDER_TARGET | SHADER_RESOURCE
-                hr = Api.D<Api.CreateTexture2D>(device, 5)(device, ref td, IntPtr.Zero, out videoTex); L("VideoTex 0x" + hr.ToString("X8")); if (hr != 0) return false;
-                Guid iidTex2D = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
-                hr = Api.D<Api.GetBuffer>(swap, 9)(swap, 0, ref iidTex2D, out backTex); L("BackTex 0x" + hr.ToString("X8")); if (hr != 0) return false;
+                if (!CreateVideoTextures()) return false;
 
                 copyRes    = Api.D<Api.CopyResource>(ctx, 47);
                 meTick     = Api.D<Api.METick>(engine, 44);
@@ -681,13 +749,14 @@ namespace CyberWallpaperFX
         void Col(float r, float g, float b, float a) { var c = new ColorF { R = r, G = g, B = b, A = a }; setCol(brush, ref c); }
 
         // Wieder in die Desktop-Ebene einhängen (WorkerW-Kind von Progman)
-        public void Attach()
+        // Rückgabe: true = hängt danach wirklich in dieser Ebene.
+        public bool Attach(IntPtr hst)
         {
-            IntPtr hst = Native.GetWorkerWChild();
-            if (hst == IntPtr.Zero) return;   // Explorer läuft gerade nicht
+            if (hst == IntPtr.Zero) return false;   // Explorer läuft gerade nicht
             Native.SetParent(Handle, hst);
             Native.MakeChild(Handle);
             Native.SetWindowPos(Handle, new IntPtr(1), 0, 0, w, h, 0x0010 | 0x0040);
+            return Native.GetParent(Handle) == hst;
         }
 
         public void Frame()
@@ -704,16 +773,38 @@ namespace CyberWallpaperFX
 
             // Watchdog: alle ~3 s prüfen, ob wir noch in der richtigen Ebene hängen und die Größe noch stimmt
             watchT += dt;
-            if (watchT >= 3f)
+            if (watchT >= watchEvery)
             {
                 watchT = 0f;
                 IntPtr want = Native.FindHost();
                 if (want != IntPtr.Zero)
                 {
-                    if (Native.GetParent(Handle) != want) Attach();
-                    Native.RECT rc;
-                    if (Native.GetClientRect(want, out rc) && rc.R > 0 && rc.B > 0 && (rc.R != w || rc.B != h))
-                    { Fatal = "Desktop-Größe geändert: " + w + "x" + h + " -> " + rc.R + "x" + rc.B; return; }
+                    bool attached = Native.GetParent(Handle) == want;
+                    if (!attached)
+                    {
+                        attached = Attach(want);
+                        if (attached) L("Wieder in die Desktop-Ebene eingehängt");
+                        else
+                        {
+                            // Klappt das Einhängen nicht, seltener versuchen (3 s -> 6, 12, 24, 30) und nach
+                            // 5 Fehlversuchen neu starten, statt alle 3 s weiter am Explorer zu rütteln.
+                            attachFails++;
+                            watchEvery = Math.Min(30f, 3f * (1 << Math.Min(attachFails, 4)));
+                            L("Einhängen in die Desktop-Ebene fehlgeschlagen (" + attachFails + "x)");
+                            if (attachFails >= 5) { Fatal = "Fenster lässt sich nicht mehr in die Desktop-Ebene einhängen"; return; }
+                        }
+                    }
+                    if (attached)
+                    {
+                        attachFails = 0; watchEvery = 3f;
+                        Native.RECT rc;
+                        if (Native.GetClientRect(want, out rc) && rc.R > 0 && rc.B > 0 && (rc.R != w || rc.B != h))
+                        {
+                            int ow = w, oh = h;
+                            if (!ResizeTo(rc.R, rc.B))
+                            { Fatal = "Desktop-Größe geändert (" + ow + "x" + oh + " -> " + rc.R + "x" + rc.B + "), Anpassen fehlgeschlagen"; return; }
+                        }
+                    }
                 }
             }
 
@@ -869,13 +960,18 @@ namespace CyberWallpaperFX
 
     static class Program
     {
-        const int MaxRestarts = 5;   // so viele schnelle Neustarts hintereinander, dann aufgeben
-        static readonly Stopwatch uptime = Stopwatch.StartNew();
+        const int MaxRestarts = 5;           // so viele schnelle Neustarts hintereinander, dann aufgeben
+        const int MaxRestartsPerHour = 20;   // Obergrenze auch für Fehler, die erst nach längerer Laufzeit wiederkommen
         const string MutexName       = "Local\\CyberWallpaperFX";
         const string ShowGuiEventName = "Local\\CyberWallpaperFX.ZeigeGui";
 
         static WForm wall;
         static MediaForm gui;
+        static System.Threading.Mutex mutex;
+        static System.Threading.EventWaitHandle showEv;
+        static Stopwatch stable;             // läuft, seit das Wallpaper wirklich zeichnet (ohne Warte- und Startzeit)
+        static int restarts;                 // schnelle Neustarts in Folge (aus /restart:n)
+        static int hourCount; static long hourStart;   // Neustarts im laufenden Stundenfenster (UTC-Ticks)
 
         // Auswahl-Oberfläche öffnen (bzw. nach vorne holen)
         static void ShowGui()
@@ -888,16 +984,26 @@ namespace CyberWallpaperFX
         [STAThread]
         static void Main(string[] args)
         {
-            int restarts = 0;
+            // /restart:<n>:<NeustartsDieseStunde>:<BeginnDesStundenfenstersUtcTicks>   /gui = Oberfläche wieder öffnen
+            bool reopenGui = false;
             foreach (string a in args)
-                if (a.StartsWith("/restart:")) int.TryParse(a.Substring(9), out restarts);
+            {
+                if (a.StartsWith("/restart:"))
+                {
+                    string[] p = a.Substring(9).Split(':');
+                    int.TryParse(p[0], out restarts);
+                    if (p.Length > 1) int.TryParse(p[1], out hourCount);
+                    if (p.Length > 2) long.TryParse(p[2], out hourStart);
+                }
+                else if (a == "/gui") reopenGui = true;
+            }
             Log.Keep = restarts > 0;
 
             // Nur eine Instanz: Ein zweiter Start würde sonst ein zweites Wallpaper darüberlegen.
             // - normaler zweiter Start: öffnet stattdessen die Oberfläche im laufenden Wallpaper
             // - automatischer Neustart (/restart:n): wartet kurz, bis die alte Instanz beendet ist
             bool owned;
-            var mutex = new System.Threading.Mutex(false, MutexName);
+            mutex = new System.Threading.Mutex(false, MutexName);
             try { owned = mutex.WaitOne(restarts > 0 ? 10000 : 0); }
             catch (System.Threading.AbandonedMutexException) { owned = true; }
             if (!owned)
@@ -905,15 +1011,27 @@ namespace CyberWallpaperFX
                 if (restarts == 0)
                 {
                     Native.AllowSetForegroundWindow(-1);   // laufender Instanz erlauben, ihr Fenster nach vorne zu holen
-                    try { System.Threading.EventWaitHandle.OpenExisting(ShowGuiEventName).Set(); } catch { }
+                    // Kurz wiederholen: Wechselt die laufende Instanz gerade (Neustart), gibt es das Event einen Moment nicht
+                    for (int i = 0; i < 20; i++)
+                    {
+                        try { using (var ev = System.Threading.EventWaitHandle.OpenExisting(ShowGuiEventName)) ev.Set(); break; }
+                        catch { System.Threading.Thread.Sleep(150); }
+                    }
                 }
                 return;
             }
-            try { Run(restarts); }
-            finally { mutex.ReleaseMutex(); }
+            try
+            {
+                // Das Event sofort anlegen, nicht erst nach dem Start: Ein zweiter EXE-Start während des Wartens auf
+                // den Desktop wird so vorgemerkt und öffnet die Oberfläche, sobald das Wallpaper läuft.
+                showEv = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, ShowGuiEventName);
+                if (reopenGui) showEv.Set();
+                Run();
+            }
+            finally { try { mutex.ReleaseMutex(); } catch { } }
         }
 
-        static void Run(int restarts)
+        static void Run()
         {
             Native.SetProcessDPIAware();
             Application.EnableVisualStyles();
@@ -924,30 +1042,34 @@ namespace CyberWallpaperFX
             for (int i = 0; i < 240 && Native.FindWindow("Progman", null) == IntPtr.Zero; i++) System.Threading.Thread.Sleep(250);
             IntPtr host = Native.GetWorkerWChild();
             if (host == IntPtr.Zero) { GiveUp("Der Windows-Desktop (Explorer) wurde nicht gefunden."); return; }
-            Native.RECT rc; int w = 1920, h = 1080;
-            if (Native.GetClientRect(host, out rc) && rc.R > 0 && rc.B > 0) { w = rc.R; h = rc.B; }
+            // Kurz warten, bis die Desktop-Ebene eine Größe hat. Bleibt sie unbekannt, mit 1920x1080 starten –
+            // der Watchdog passt die Größe dann an Ort und Stelle an.
+            Native.RECT rc; int w = 1920, h = 1080; bool sized = false;
+            for (int i = 0; i < 20 && !sized; i++)
+            {
+                if (Native.GetClientRect(host, out rc) && rc.R > 0 && rc.B > 0) { w = rc.R; h = rc.B; sized = true; }
+                else System.Threading.Thread.Sleep(250);
+            }
+            if (!sized) Log.W("Desktop-Größe noch unbekannt -> starte mit " + w + "x" + h);
 
             var f = new WForm(w, h);
             wall = f;
             f.Show();
-            Native.SetParent(f.Handle, host);
-            Native.MakeChild(f.Handle);
-            Native.SetWindowPos(f.Handle, new IntPtr(1), 0, 0, w, h, 0x0010 | 0x0040);
+            if (!f.Attach(host)) Log.W("Einhängen in die Desktop-Ebene beim Start fehlgeschlagen (Watchdog versucht es erneut)");
 
             if (!f.Init())
             {
                 // Kein totes Fenster über dem Desktop stehen lassen
                 f.ShuttingDown = true; f.Dispose();
-                if (restarts > 0 && restarts < MaxRestarts)
-                {   // nach einem Neustart (z. B. Treiber-Update) ist das Grafikgerät evtl. noch nicht wieder da -> später erneut
-                    System.Threading.Thread.Sleep(2000 * restarts);
-                    Relaunch(restarts + 1);
-                }
-                else GiveUp("Das Wallpaper konnte nicht gestartet werden.");
+                // Auch beim allerersten Start erneut versuchen: Direkt nach der Anmeldung oder während eines
+                // Treiber-Updates ist das Grafikgerät oft nur kurz nicht bereit.
+                if (restarts < MaxRestarts) System.Threading.Thread.Sleep(2000 * (restarts + 1));
+                RestartOrGiveUp(restarts + 1, "Das Wallpaper konnte nicht gestartet werden.", false);
                 return;
             }
+            stable = Stopwatch.StartNew();
 
-            string restartReason = null;
+            bool fatalHandled = false;
             var timer = new Timer(); timer.Interval = 1000 / Config.Fps;
             var tray = new NotifyIcon();
             tray.Icon = SystemIcons.Application; tray.Text = "Cyber Wallpaper"; tray.Visible = true;
@@ -960,7 +1082,6 @@ namespace CyberWallpaperFX
             tray.DoubleClick += (s, e) => ShowGui();
 
             // Normaler zweiter Start setzt dieses Event -> Oberfläche im UI-Thread öffnen
-            var showEv = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, ShowGuiEventName);
             var waiter = new System.Threading.Thread(() =>
             {
                 while (true)
@@ -975,29 +1096,45 @@ namespace CyberWallpaperFX
             timer.Tick += (s, e) =>
             {
                 f.Frame();
-                if (f.Fatal != null && restartReason == null)
+                if (f.Fatal != null && !fatalHandled)
                 {
-                    restartReason = f.Fatal;
-                    timer.Stop(); f.ShuttingDown = true; tray.Visible = false; Application.Exit();
+                    fatalHandled = true;
+                    timer.Stop();
+                    OnFatal(f, tray);
                 }
             };
             timer.Start();
             Application.Run();
             tray.Dispose();
-
-            if (restartReason != null)
-            {
-                Log.W("Neustart nötig: " + restartReason);
-                // Lief die App schon länger stabil, zählt das als neuer Vorfall; sonst hochzählen (Schutz vor Endlosschleife)
-                int n = uptime.Elapsed.TotalSeconds > 60 ? 1 : restarts + 1;
-                if (n > MaxRestarts) GiveUp("Das Wallpaper musste zu oft hintereinander neu starten.\nLetzter Grund: " + restartReason);
-                else Relaunch(n);
-            }
         }
 
-        static void Relaunch(int n)
+        // Weiterzeichnen ist sinnlos -> neu starten. Das passiert direkt hier im Timer-Tick und endet mit
+        // Environment.Exit: Ein offener Dialog (z. B. „Hinzufügen …") hat eine eigene Nachrichtenschleife,
+        // hinter der Application.Exit hängen bliebe – das Wallpaper wäre so lange tot.
+        static void OnFatal(WForm f, NotifyIcon tray)
         {
-            try { Process.Start(Application.ExecutablePath, "/restart:" + n); }
+            string reason = f.Fatal;
+            f.ShuttingDown = true;
+            bool guiOpen = false;
+            try { guiOpen = gui != null && !gui.IsDisposed && gui.Visible; } catch { }
+            try { tray.Visible = false; tray.Dispose(); } catch { }
+            try { f.Hide(); } catch { }
+            Log.W("Neustart nötig: " + reason);
+            // Lief die App schon länger stabil, zählt das als neuer Vorfall; sonst hochzählen (Schutz vor Endlosschleife)
+            int n = stable != null && stable.Elapsed.TotalSeconds > 60 ? 1 : restarts + 1;
+            RestartOrGiveUp(n, "Das Wallpaper musste zu oft neu starten.\nLetzter Grund: " + reason, guiOpen);
+            try { mutex.ReleaseMutex(); } catch { }
+            Environment.Exit(0);
+        }
+
+        // Startet die App neu – außer es waren zu viele Neustarts in Folge (n) oder innerhalb einer Stunde.
+        static void RestartOrGiveUp(int n, string giveUpMsg, bool reopenGui)
+        {
+            long now = DateTime.UtcNow.Ticks;
+            if (hourStart <= 0 || now < hourStart || now - hourStart > TimeSpan.TicksPerHour) { hourStart = now; hourCount = 0; }
+            hourCount++;
+            if (n > MaxRestarts || hourCount > MaxRestartsPerHour) { GiveUp(giveUpMsg); return; }
+            try { Process.Start(Application.ExecutablePath, "/restart:" + n + ":" + hourCount + ":" + hourStart + (reopenGui ? " /gui" : "")); }
             catch (Exception ex) { Log.W("Neustart fehlgeschlagen: " + ex.Message); }
         }
 

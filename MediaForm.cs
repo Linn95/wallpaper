@@ -136,7 +136,7 @@ namespace CyberWallpaperFX
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             Text = "Wallpaper – Hintergrund wählen";
-            Icon = SystemIcons.Application;
+            Icon = AppIcon.Full;
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(780, 480);
             MinimumSize = new Size(560, 360);

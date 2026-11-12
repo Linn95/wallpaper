@@ -4,11 +4,44 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Forms;
 using Microsoft.Win32;
 
 // Helfer, die Programm (CyberWallpaper.exe) und Installer (CyberWallpaper-Setup.exe) gemeinsam nutzen.
 namespace CyberWallpaperFX
 {
+    // Programm-Icon (icon.ico, eingebettet als Ressource "app.ico" mit allen Größen; erzeugt von tools\make-icon.ps1)
+    static class AppIcon
+    {
+        static Icon full;
+
+        // Alle Größen; Fenster suchen sich daraus Titelleisten- und Alt+Tab-Größe selbst aus
+        public static Icon Full
+        {
+            get
+            {
+                if (full == null)
+                {
+                    try
+                    {
+                        using (Stream s = typeof(AppIcon).Assembly.GetManifestResourceStream("app.ico"))
+                            if (s != null) full = new Icon(s);
+                    }
+                    catch { }
+                    if (full == null) full = SystemIcons.Application;
+                }
+                return full;
+            }
+        }
+
+        // Passende kleine Größe fürs Tray (16 px bei 100 %, 20/24 px bei höherer Skalierung)
+        public static Icon Small()
+        {
+            try { return new Icon(Full, SystemInformation.SmallIconSize); }
+            catch { return Full; }
+        }
+    }
+
     // Start mit Windows über HKCU\...\Run (erscheint im Task-Manager unter "Autostart-Apps")
     static class Autostart
     {

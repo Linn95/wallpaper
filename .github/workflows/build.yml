@@ -1,0 +1,57 @@
+# Baut CyberWallpaper.exe bei jedem Push.
+# Bei einem Tag wie v1.0.0 wird zusaetzlich ein GitHub-Release mit dem ZIP veroeffentlicht:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # build.ps1 nutzt den in Windows eingebauten .NET-Framework-Compiler (csc.exe), der auf dem Runner vorhanden ist
+      - name: Bauen
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: ZIP packen
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "CyberWallpaper-$env:GITHUB_REF_NAME" } else { 'CyberWallpaper' }
+          $files = 'CyberWallpaper.exe', 'background.png', 'city_mask.png', 'cloud_mask.png', 'LIESMICH.md'
+          foreach ($f in $files) { if (-not (Test-Path $f)) { throw "Datei fehlt: $f" } }
+          Compress-Archive -Path $files -DestinationPath "$name.zip"
+          "ZIP_NAME=$name" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}.zip
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release veroeffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

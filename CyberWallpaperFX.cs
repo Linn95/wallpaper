@@ -135,6 +135,7 @@ namespace CyberWallpaperFX
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
         public struct RECT { public int L, T, R, B; }
         static string Cls(IntPtr h) { var s = new StringBuilder(64); GetClassName(h, s, 64); return s.ToString(); }
         public static bool IsClass(IntPtr h, string name) { return Cls(h) == name; }
@@ -215,9 +216,12 @@ namespace CyberWallpaperFX
         double time; float neonT; float lightningT, nextLightning; float flash; int watch;
         // Video
         bool videoMode, haveFrame, vSrcSet; int vFrames, vLogTick, vLogCount;
+        bool videoSupported, videoReady, imageEffects; uint vNatW, vNatH;
+        string currentMedia = "";
         IntPtr engine, videoTex, backTex, dxgiMgr, mfAttrs, notifyPtr;
         EngineNotify notify; NormRect vSrc;
         Api.CopyResource copyRes; Api.METick meTick; Api.METransfer meTransfer; Api.MENativeSize meSize;
+        Api.MESetSource meSetSource; Api.MEPlay mePlay, mePause;
         readonly StringBuilder log = new StringBuilder();
         Guid IID_Surface = new Guid(0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
 
@@ -235,19 +239,20 @@ namespace CyberWallpaperFX
         {
             try
             {
-                string videoPath = Config.UseVideo ? FindVideo() : null;
-                videoMode = videoPath != null;
-                L("Video-Datei: " + (videoMode ? System.IO.Path.GetFileName(videoPath) : "(keine)"));
+                Settings.Load();
+                string startMedia = ResolveStartMedia();
+                L("Start-Medium: " + System.IO.Path.GetFileName(startMedia));
                 int ofl;
-                // BGRA_SUPPORT (0x20) für Direct2D, VIDEO_SUPPORT (0x800) für die Media Engine
-                int hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, videoMode ? 0x820u : 0x20u, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
-                if (hr != 0 && videoMode)
+                // BGRA_SUPPORT (0x20) für Direct2D, VIDEO_SUPPORT (0x800) für die Media Engine.
+                // Immer mit Video-Support, damit später live auf ein Video gewechselt werden kann.
+                int hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x820, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
+                videoSupported = hr == 0;
+                if (!videoSupported)
                 {
-                    L("D3D11 mit Video-Support 0x" + hr.ToString("X8") + " -> ohne");
-                    videoMode = false;
+                    L("D3D11 mit Video-Support 0x" + hr.ToString("X8") + " -> ohne (nur Bilder)");
                     hr = Api.D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out device, out ofl, out ctx);
                 }
-                L("D3D11 0x" + hr.ToString("X8") + " videoMode=" + videoMode); if (hr != 0) return false;
+                L("D3D11 0x" + hr.ToString("X8") + " videoSupported=" + videoSupported); if (hr != 0) return false;
                 Guid iidF2 = new Guid(0x50c83a1c, 0xe072, 0x4c48, 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0);
                 IntPtr factory; hr = Api.CreateDXGIFactory2(0, ref iidF2, out factory); L("Factory 0x" + hr.ToString("X8")); if (hr != 0) return false;
                 var d = new SwapChainDesc1 { Width = (uint)w, Height = (uint)h, Format = 87, SampleCount = 1, BufferUsage = 0x20, BufferCount = 2, SwapEffect = 4 };
@@ -273,14 +278,16 @@ namespace CyberWallpaperFX
                 drawB   = Api.D<Api.DrawBitmap>(rt, 26);
                 setCol  = Api.D<Api.SetColor>(brush, 8);
 
-                if (videoMode && !InitVideo(videoPath)) { videoMode = false; L("Video fehlgeschlagen -> Bildmodus"); }
-                if (!videoMode) LoadBackground();
-                if (bg != IntPtr.Zero) { sunX = bgRect.L + Config.SunFx * (bgRect.R - bgRect.L); sunY = bgRect.T + Config.SunFy * (bgRect.B - bgRect.T); }
-                else { sunX = w * Config.SunFx; sunY = h * Config.SunFy; }
                 BuildVignette();
                 InitEffects();
                 nextLightning = Rndf(Config.LightningEveryMinSec, Config.LightningEveryMaxSec);
-                L("Setup OK " + w + "x" + h + (videoMode ? " VIDEO" : " img " + imgW + "x" + imgH) + " lights=" + sparks.Count);
+                string err = SwitchTo(startMedia);
+                if (err != null && !Media.SamePath(startMedia, Media.OriginalBackground))
+                {
+                    L("Start-Medium fehlgeschlagen (" + err + ") -> Standard-Bild");
+                    err = SwitchTo(Media.OriginalBackground);
+                }
+                L("Setup OK " + w + "x" + h + " | " + StatusText);
                 return true;
             }
             catch (Exception ex) { L("EX " + ex); return false; }
@@ -311,8 +318,76 @@ namespace CyberWallpaperFX
             catch { return null; }
         }
 
-        // Media Engine aufsetzen: dekodiert das Video per GPU in eine Textur (stumm, Endlosschleife)
-        bool InitVideo(string path)
+        // Start-Medium: zuletzt gewähltes (settings.txt), sonst neuestes Video, sonst Standard-Bild
+        static string ResolveStartMedia()
+        {
+            if (Settings.Current.Length > 0 && System.IO.File.Exists(Settings.Current)) return Settings.Current;
+            string v = Config.UseVideo ? FindVideo() : null;
+            return v ?? Media.OriginalBackground;
+        }
+
+        // Live auf ein anderes Medium wechseln. Rückgabe: null = ok, sonst Fehlermeldung.
+        public string SwitchTo(string path)
+        {
+            try
+            {
+                if (!System.IO.File.Exists(path)) return "Datei nicht gefunden";
+                if (Media.IsVideo(path))
+                {
+                    if (!videoSupported) return "Video wird auf diesem System nicht unterstützt";
+                    if (!videoReady && !InitVideoEngine()) return "Video-Engine konnte nicht gestartet werden (siehe Log)";
+                    notify.ErrorHr = 0; notify.ErrorCode = 0;
+                    haveFrame = false; vSrcSet = false; vNatW = vNatH = 0; vFrames = 0; vLogTick = 0; vLogCount = 0;
+                    int hr = meSetSource(engine, path); L("SetSource 0x" + hr.ToString("X8"));
+                    if (hr != 0) return "Video konnte nicht geöffnet werden (0x" + hr.ToString("X8") + ")";
+                    hr = mePlay(engine); L("Play 0x" + hr.ToString("X8"));
+                    videoMode = true;
+                }
+                else if (Media.IsImage(path))
+                {
+                    if (videoReady) mePause(engine);   // Video anhalten, spart Leistung
+                    if (!LoadBackground(path)) return "Bild konnte nicht geladen werden";
+                    imageEffects = Media.SamePath(path, Media.OriginalBackground);   // Sonne/Lichter passen nur zum Standard-Bild
+                    if (imageEffects)
+                    {
+                        sunX = bgRect.L + Config.SunFx * (bgRect.R - bgRect.L);
+                        sunY = bgRect.T + Config.SunFy * (bgRect.B - bgRect.T);
+                        BuildSparkles();
+                    }
+                    else sparks.Clear();
+                    videoMode = false;
+                }
+                else return "Dateityp wird nicht unterstützt";
+
+                currentMedia = path;
+                Settings.Current = path; Settings.Save();
+                L("Gewechselt zu: " + System.IO.Path.GetFileName(path));
+                return null;
+            }
+            catch (Exception ex) { L("SwitchTo EX " + ex); return ex.Message; }
+        }
+
+        public string CurrentMedia { get { return currentMedia; } }
+
+        // Kurzbeschreibung für die Oberfläche
+        public string StatusText
+        {
+            get
+            {
+                if (currentMedia.Length == 0) return "(nichts)";
+                string name = System.IO.Path.GetFileName(currentMedia);
+                if (videoMode)
+                {
+                    string s = name + " – Video" + (vNatW > 0 ? " " + vNatW + "×" + vNatH : " (lädt …)");
+                    if (notify != null && notify.ErrorHr != 0) s += " – FEHLER beim Abspielen (0x" + notify.ErrorHr.ToString("X8") + ")";
+                    return s;
+                }
+                return name + " – Bild" + (imageEffects ? " mit Effekten" : "");
+            }
+        }
+
+        // Media Engine einmalig aufsetzen: dekodiert Videos per GPU in eine Textur (stumm, Endlosschleife)
+        bool InitVideoEngine()
         {
             try
             {
@@ -352,8 +427,6 @@ namespace CyberWallpaperFX
                 Api.D<Api.MESetBool>(engine, 35)(engine, 1);   // SetMuted
                 Api.D<Api.MESetBool>(engine, 31)(engine, 1);   // SetLoop
                 Api.D<Api.MESetBool>(engine, 29)(engine, 1);   // SetAutoPlay
-                hr = Api.D<Api.MESetSource>(engine, 6)(engine, path); L("SetSource 0x" + hr.ToString("X8")); if (hr != 0) return false;
-                hr = Api.D<Api.MEPlay>(engine, 32)(engine);           L("Play 0x" + hr.ToString("X8"));
 
                 // Zwischentextur in Bildschirmgröße: Ziel für neue Videobilder, wird jeden Frame in den Backbuffer kopiert
                 var td = new Tex2DDesc { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = 87,
@@ -366,7 +439,11 @@ namespace CyberWallpaperFX
                 meTick     = Api.D<Api.METick>(engine, 44);
                 meTransfer = Api.D<Api.METransfer>(engine, 43);
                 meSize     = Api.D<Api.MENativeSize>(engine, 40);
+                meSetSource = Api.D<Api.MESetSource>(engine, 6);
+                mePlay      = Api.D<Api.MEPlay>(engine, 32);
+                mePause     = Api.D<Api.MEPlay>(engine, 33);   // Pause hat dieselbe Signatur wie Play
                 vSrc = new NormRect { L = 0, T = 0, R = 1, B = 1 };
+                videoReady = true;
                 return true;
             }
             catch (Exception ex) { L("Video EX " + ex); return false; }
@@ -380,30 +457,35 @@ namespace CyberWallpaperFX
             float sa = (float)w / h, va = (float)vw / vh;
             if (va > sa) { float f = sa / va; vSrc = new NormRect { L = (1 - f) / 2, T = 0, R = (1 + f) / 2, B = 1 }; }
             else         { float f = va / sa; vSrc = new NormRect { L = 0, T = (1 - f) / 2, R = 1, B = (1 + f) / 2 }; }
-            vSrcSet = true;
+            vSrcSet = true; vNatW = vw; vNatH = vh;
             L("Video nativ " + vw + "x" + vh);
         }
 
-        void LoadBackground()
+        // Bild als Hintergrund laden (ersetzt ein vorher geladenes Bild)
+        bool LoadBackground(string path)
         {
-            string path = System.IO.Path.Combine(Application.StartupPath, "background.png");
-            if (!System.IO.File.Exists(path)) { L("kein background.png"); return; }
+            if (!System.IO.File.Exists(path)) { L("Bild fehlt: " + path); return false; }
             using (var img = new Bitmap(path))
             {
-                imgW = img.Width; imgH = img.Height;
-                var r = new Rectangle(0, 0, imgW, imgH);
+                int iw = img.Width, ih = img.Height;
+                var r = new Rectangle(0, 0, iw, ih);
                 var bd = img.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
-                var size = new SizeU { W = (uint)imgW, H = (uint)imgH };
+                var size = new SizeU { W = (uint)iw, H = (uint)ih };
                 var bp = new BitmapProps { Format = 87, Alpha = 1, DpiX = 96, DpiY = 96 };
-                int hr = Api.D<Api.CreateBitmap>(rt, 4)(rt, size, bd.Scan0, (uint)bd.Stride, ref bp, out bg);
+                IntPtr newBg;
+                int hr = Api.D<Api.CreateBitmap>(rt, 4)(rt, size, bd.Scan0, (uint)bd.Stride, ref bp, out newBg);
                 img.UnlockBits(bd);
-                L("CreateBitmap 0x" + hr.ToString("X8"));
+                L("CreateBitmap 0x" + hr.ToString("X8") + " " + iw + "x" + ih);
+                if (hr != 0) return false;
+                if (bg != IntPtr.Zero) Marshal.Release(bg);
+                bg = newBg; imgW = iw; imgH = ih;
             }
             // Cover-Skalierung
             float scale = Math.Max((float)w / imgW, (float)h / imgH);
             float dw = imgW * scale, dh = imgH * scale;
             float ox = (w - dw) * 0.5f, oy = (h - dh) * 0.5f;
             bgRect = new RectF { L = ox, T = oy, R = ox + dw, B = oy + dh };
+            return true;
         }
 
         void BuildVignette()
@@ -430,10 +512,19 @@ namespace CyberWallpaperFX
 
         void InitEffects()
         {
-            if (Config.Rain && (!videoMode || Config.VideoRain))
+            if (Config.Rain)
                 for (int i = 0; i < Config.RainCount; i++)
                     drops.Add(new Drop { X = Rndf(0, w), Y = Rndf(0, h), Spd = Rndf(Config.RainSpeedMin, Config.RainSpeedMax), Len = Rndf(Config.RainLenMin, Config.RainLenMax), A = Rndf(0.07f, 0.22f) });
 
+            if (Config.Embers)
+                for (int i = 0; i < Config.EmberCount; i++)
+                    embers.Add(new Ember { X = Rndf(0, w), Y = Rndf(0, h), Vy = Rndf(-24f, -10f), Drift = Rndf(-10f, 10f), R = Rndf(1.2f, 2.6f), A = Rndf(0.2f, 0.6f), C = rnd.NextDouble() < 0.5 ? new float[] { 1f, 0.55f, 0.2f } : new float[] { 1f, 0.3f, 0.7f } });
+        }
+
+        // Stadt-/Wolken-Lichter aus den Masken bauen (passen nur zum Standard-Bild background.png)
+        void BuildSparkles()
+        {
+            sparks.Clear();
             if (Config.Sparkles && imgW > 0 && imgH > 0)
             {
                 // Gemalte Bereiche: Stadt (city_mask) -> blau, Wolke (cloud_mask) -> pink.
@@ -505,9 +596,6 @@ namespace CyberWallpaperFX
                 }
             }
 
-            if (Config.Embers)
-                for (int i = 0; i < Config.EmberCount; i++)
-                    embers.Add(new Ember { X = Rndf(0, w), Y = Rndf(0, h), Vy = Rndf(-24f, -10f), Drift = Rndf(-10f, 10f), R = Rndf(1.2f, 2.6f), A = Rndf(0.2f, 0.6f), C = rnd.NextDouble() < 0.5 ? new float[] { 1f, 0.55f, 0.2f } : new float[] { 1f, 0.3f, 0.7f } });
         }
 
         // Lädt eine Masken-PNG (gleiche Größe wie das Bild) -> bool je Pixel (weiß = im Bereich)
@@ -563,7 +651,7 @@ namespace CyberWallpaperFX
 
             // Video: neues Bild in die Zwischentextur holen, dann jeden Frame in den Backbuffer kopieren
             // (Flip-Swapchain verwirft den Inhalt nach Present, daher auch ohne neues Bild kopieren)
-            if (videoMode)
+            if (videoMode && videoReady)
             {
                 long pts;
                 if (meTick(engine, out pts) == 0)   // S_OK = neues Videobild bereit
@@ -590,7 +678,7 @@ namespace CyberWallpaperFX
             }
 
             // Hintergrundbild (Cover)
-            if (bg != IntPtr.Zero) drawB(rt, bg, ref bgRect, 1f, 1, IntPtr.Zero);
+            if (!videoMode && bg != IntPtr.Zero) drawB(rt, bg, ref bgRect, 1f, 1, IntPtr.Zero);
 
             // Neon-Schimmer (atmender Farbstich)
             if (Config.NeonPulse && (!videoMode || Config.VideoNeonPulse))
@@ -604,7 +692,7 @@ namespace CyberWallpaperFX
             }
 
             // Sonne am Horizont: pulsierender Schein + langsam rotierende Lichtstrahlen
-            if (Config.Sun && !videoMode)   // Sonne ist auf das Bild positioniert -> im Videomodus aus
+            if (Config.Sun && !videoMode && imageEffects)   // Sonne ist auf das Standard-Bild positioniert
             {
                 float pulse = 0.82f + 0.18f * (float)Math.Sin(time * 1.1);
                 float[] sc = Config.SunColor;
@@ -629,7 +717,7 @@ namespace CyberWallpaperFX
             }
 
             // Stadtlichter als leuchtende Lichtquellen (weicher mehrschichtiger Bloom)
-            if (Config.Sparkles)
+            if (Config.Sparkles && !videoMode && imageEffects)
                 foreach (var s in sparks)
                 {
                     float wave = 0.5f + 0.5f * (float)Math.Sin(time * s.Freq + s.Phase);
@@ -655,7 +743,7 @@ namespace CyberWallpaperFX
                 }
 
             // Regen
-            if (Config.Rain)
+            if (Config.Rain && (!videoMode || Config.VideoRain))
             {
                 float wind = Config.RainWind;
                 foreach (var dp in drops)
@@ -697,16 +785,40 @@ namespace CyberWallpaperFX
 
     static class Program
     {
+        static WForm wall;
+        static MediaForm gui;
+
+        // Auswahl-Oberfläche öffnen (bzw. nach vorne holen)
+        static void ShowGui()
+        {
+            if (wall == null) return;
+            if (gui == null || gui.IsDisposed) gui = new MediaForm(wall);
+            gui.ShowAndActivate();
+        }
+
         [STAThread]
         static void Main()
         {
+            // Einzelinstanz: Läuft das Wallpaper schon, öffnet ein zweiter Start dort die Oberfläche
+            bool first;
+            var mutex = new System.Threading.Mutex(true, "Local\\CyberWallpaper.Instanz", out first);
+            if (!first)
+            {
+                Native.AllowSetForegroundWindow(-1);   // laufender Instanz erlauben, ihr Fenster nach vorne zu holen
+                try { System.Threading.EventWaitHandle.OpenExisting("Local\\CyberWallpaper.ZeigeGui").Set(); } catch { }
+                return;
+            }
+            var showEv = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, "Local\\CyberWallpaper.ZeigeGui");
+
             Native.SetProcessDPIAware();
             Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
             IntPtr host = Native.GetWorkerWChild();
             Native.RECT rc; int w = 1920, h = 1080;
             if (Native.GetClientRect(host, out rc) && rc.R > 0 && rc.B > 0) { w = rc.R; h = rc.B; }
 
             var f = new WForm(w, h);
+            wall = f;
             f.Show();
             Native.SetParent(f.Handle, host);
             Native.MakeChild(f.Handle);
@@ -715,8 +827,12 @@ namespace CyberWallpaperFX
             var tray = new NotifyIcon();
             tray.Icon = SystemIcons.Application; tray.Text = "Cyber Wallpaper"; tray.Visible = true;
             var menu = new ContextMenuStrip();
+            var miGui = menu.Items.Add("Hintergrund wählen …", null, (s, e) => ShowGui());
+            miGui.Font = new Font(miGui.Font, FontStyle.Bold);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Beenden", null, (s, e) => { tray.Visible = false; Application.Exit(); });
             tray.ContextMenuStrip = menu;
+            tray.DoubleClick += (s, e) => ShowGui();
 
             if (f.Init())
             {
@@ -724,8 +840,22 @@ namespace CyberWallpaperFX
                 timer.Tick += (s, e) => f.Frame();
                 timer.Start();
             }
+
+            // Wartet auf "zweiten Start" und öffnet dann die Oberfläche im UI-Thread
+            var waiter = new System.Threading.Thread(() =>
+            {
+                while (true)
+                {
+                    showEv.WaitOne();
+                    try { f.BeginInvoke((MethodInvoker)ShowGui); } catch { }
+                }
+            });
+            waiter.IsBackground = true;
+            waiter.Start();
+
             Application.Run();
             tray.Dispose();
+            GC.KeepAlive(mutex);
         }
     }
 }

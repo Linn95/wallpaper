@@ -11,6 +11,26 @@ Doppelklick auf `CyberWallpaper.exe`.
 ## Beenden
 Rechtsklick auf das Tray-Icon (unten rechts bei der Uhr) -> **Beenden**.
 
+## Hintergrund wählen (Oberfläche, Branch `GUI`)
+Öffnen auf einem dieser Wege:
+- Rechtsklick aufs Tray-Icon -> **Hintergrund wählen …**
+- Doppelklick aufs Tray-Icon
+- `CyberWallpaper.exe` einfach nochmal starten: Es startet kein zweites Wallpaper,
+  sondern öffnet die Oberfläche im laufenden.
+
+In der Liste stehen das Standard-Bild (`background.png`, mit Sonne und Stadtlichtern),
+alles aus dem `videos`-Ordner und selbst hinzugefügte Dateien. Der aktuelle Hintergrund
+ist mit ▶ markiert.
+- **Anwenden** (oder Doppelklick / Enter): wechselt sofort, ohne Neustart.
+- **Hinzufügen …**: Videos/Bilder von irgendwo auswählen (werden nur verlinkt, nicht kopiert).
+- **Entfernen** (oder Entf): nimmt selbst hinzugefügte Einträge aus der Liste, die Datei bleibt.
+- **videos-Ordner öffnen**: dort abgelegte Videos erscheinen automatisch in der Liste.
+
+Unterstützt: Videos `.mp4/.m4v/.mov/.mkv/.webm`, Bilder `.png/.jpg/.jpeg/.bmp`.
+Die Auswahl wird in `settings.txt` gespeichert und beim nächsten Start wieder geladen.
+Fremde Bilder laufen ohne Sonne/Stadtlichter (die passen nur zum Standard-Bild).
+Schließen des Fensters versteckt es nur, das Wallpaper läuft weiter.
+
 ## Eigenes Bild verwenden
 Lege dein Wunschbild als `background.png` in diesen Ordner (überschreibt das aktuelle)
 und starte das Programm neu. Am besten in Bildschirmauflösung oder größer.
@@ -54,7 +74,9 @@ Neu bauen (PowerShell im Projektordner):
 
 ## Dateien
 - `CyberWallpaper.exe`   – das Programm
-- `CyberWallpaperFX.cs`  – Quellcode
+- `CyberWallpaperFX.cs`  – Quellcode (Rendering, Video, Wallpaper-Einbindung)
+- `MediaForm.cs`         – Quellcode der Oberfläche (Auswahl, Einstellungen)
+- `settings.txt`         – gespeicherte Auswahl (lokal, nicht im Repo)
 - `background.png`       – dein Hintergrundbild
 - `build.ps1`            – Build-Skript (nutzt den eingebauten C#-Compiler)
 

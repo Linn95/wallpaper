@@ -8,3 +8,6 @@
 *.mp4
 *.webm
 *.mov
+
+# Lokale Auswahl/Pfade der Oberflaeche
+settings.txt

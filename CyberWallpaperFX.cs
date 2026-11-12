@@ -76,6 +76,11 @@ namespace CyberWallpaperFX
         public const string VideoFolder    = "videos";             // automatisch: neuestes Video in diesem Ordner
         public const bool   VideoRain      = false;                // Regen auch über dem Video
         public const bool   VideoNeonPulse = false;                // Neon-Schimmer auch über dem Video
+
+        // --- Pausieren, wenn eine Vollbild-Anwendung (z. B. ein Spiel) im Vordergrund läuft ---
+        // Das Wallpaper ist dann ohnehin verdeckt; Video und Zeichnen werden angehalten, um GPU/CPU zu sparen.
+        public const bool   PauseOnFullscreen = true;
+        public const bool   PauseOnMaximized  = false;             // zusätzlich bei maximierten Fenstern pausieren
     }
 
     class Drop { public float X, Y, Spd, Len, A; }
@@ -138,8 +143,21 @@ namespace CyberWallpaperFX
         [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
         [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
+        // Vollbild-Erkennung
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+        [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+        [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+        [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
+        [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
         public struct RECT { public int L, T, R, B; }
+        public struct POINT { public int X, Y; }
+        [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
         static string Cls(IntPtr h) { var s = new StringBuilder(64); GetClassName(h, s, 64); return s.ToString(); }
+        public static string ClassOf(IntPtr h) { return Cls(h); }
         public static bool IsClass(IntPtr h, string name) { return Cls(h) == name; }
         // Sucht die Desktop-Ebene hinter den Icons, ohne etwas zu verändern (IntPtr.Zero = Explorer läuft nicht).
         public static IntPtr FindHost() {
@@ -271,6 +289,11 @@ namespace CyberWallpaperFX
         double lastT; float watchT, watchEvery = 3f; int failStreak, attachFails; bool ready, handleLost;
         public string Fatal;          // != null: Weiterzeichnen ist sinnlos -> Program startet die App neu
         public bool ShuttingDown;     // gewolltes Beenden (kein Fehler)
+        // Pause bei Vollbild-Anwendungen
+        public bool Paused;           // true: es wird nicht gezeichnet, Video angehalten
+        string pausedBy;              // Prozessname der Vollbild-Anwendung (für Log und Statuszeile)
+        double lastPauseCheck; int fsHits;
+        static readonly uint ownPid = (uint)Process.GetCurrentProcess().Id;
         Guid IID_Surface = new Guid(0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
 
         public WForm(int ww, int hh) {
@@ -468,6 +491,7 @@ namespace CyberWallpaperFX
                     int hr = meSetSource(engine, path); L("SetSource 0x" + hr.ToString("X8"));
                     if (hr != 0) return "Video konnte nicht geöffnet werden (0x" + hr.ToString("X8") + ")";
                     hr = mePlay(engine); L("Play 0x" + hr.ToString("X8"));
+                    if (Paused) mePause(engine);   // läuft gerade eine Vollbild-Anwendung: erst beim Fortsetzen abspielen
                     videoMode = true;
                 }
                 else if (Media.IsImage(path))
@@ -503,13 +527,15 @@ namespace CyberWallpaperFX
             {
                 if (currentMedia.Length == 0) return "(nichts)";
                 string name = System.IO.Path.GetFileName(currentMedia);
+                string s;
                 if (videoMode)
                 {
-                    string s = name + " – Video" + (vNatW > 0 ? " " + vNatW + "×" + vNatH : " (lädt …)");
+                    s = name + " – Video" + (vNatW > 0 ? " " + vNatW + "×" + vNatH : " (lädt …)");
                     if (notify != null && notify.ErrorHr != 0) s += " – FEHLER beim Abspielen (0x" + notify.ErrorHr.ToString("X8") + ")";
-                    return s;
                 }
-                return name + " – Bild" + (imageEffects ? " mit Effekten" : "");
+                else s = name + " – Bild" + (imageEffects ? " mit Effekten" : "");
+                if (Paused) s += " – pausiert (" + pausedBy + ")";
+                return s;
             }
         }
 
@@ -759,6 +785,58 @@ namespace CyberWallpaperFX
             return Native.GetParent(Handle) == hst;
         }
 
+        // Fensterklassen der Windows-Oberfläche, die nie als Vollbild-Anwendung zählen
+        static readonly string[] ShellClasses = {
+            "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd",           // Desktop, Taskleiste
+            "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow",              // Startmenü, Suche, Alt+Tab
+            "MultitaskingViewFrame", "ForegroundStaging", "NotifyIconOverflowWindow",
+            "TopLevelWindowForOverflowXamlIsland"
+        };
+
+        // Liefert den Prozessnamen, wenn eine Vollbild-Anwendung den Hauptbildschirm verdeckt, sonst null
+        string FullscreenApp()
+        {
+            try
+            {
+                IntPtr fg = Native.GetForegroundWindow();
+                if (fg == IntPtr.Zero || !Native.IsWindowVisible(fg) || Native.IsIconic(fg)) return null;
+                uint pid; Native.GetWindowThreadProcessId(fg, out pid);
+                if (pid == ownPid) return null;                                   // eigene Oberfläche
+                string cls = Native.ClassOf(fg);
+                foreach (string sc in ShellClasses) if (cls == sc) return null;
+
+                // Exklusives Direct3D-Vollbild / Präsentationsmodus meldet Windows direkt
+                int quns;
+                bool d3d = Native.SHQueryUserNotificationState(out quns) == 0 && (quns == 3 || quns == 4);
+
+                // Sonst: Vordergrundfenster deckt den ganzen Hauptbildschirm ab (randloses Vollbild)
+                var primary = Native.MonitorFromPoint(new Native.POINT { X = 0, Y = 0 }, 1);   // MONITOR_DEFAULTTOPRIMARY
+                bool onPrimary = Native.MonitorFromWindow(fg, 2) == primary;                   // MONITOR_DEFAULTTONEAREST
+                bool full = false, max = false;
+                if (onPrimary)
+                {
+                    var mi = new Native.MONITORINFO { cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO)) };
+                    Native.RECT wr;
+                    if (Native.GetMonitorInfo(primary, ref mi) && Native.GetWindowRect(fg, out wr))
+                        full = wr.L <= mi.rcMonitor.L && wr.T <= mi.rcMonitor.T && wr.R >= mi.rcMonitor.R && wr.B >= mi.rcMonitor.B;
+                    max = Config.PauseOnMaximized && Native.IsZoomed(fg);
+                }
+                if (!d3d && !full && !max) return null;
+
+                string name;
+                try { name = Process.GetProcessById((int)pid).ProcessName; } catch { name = "?"; }
+                return name + (d3d ? ", exklusives Vollbild" : full ? ", Vollbild" : ", maximiert");
+            }
+            catch { return null; }
+        }
+
+        void SetPaused(bool pause, string by)
+        {
+            Paused = pause; pausedBy = by;
+            if (videoMode && videoReady) { if (pause) mePause(engine); else mePlay(engine); }
+            L(pause ? "Pausiert: Vollbild-Anwendung im Vordergrund (" + by + ")" : "Fortgesetzt");
+        }
+
         public void Frame()
         {
             if (rt == IntPtr.Zero || Fatal != null || ShuttingDown) return;
@@ -769,6 +847,18 @@ namespace CyberWallpaperFX
             double now = clock.Elapsed.TotalSeconds;
             float dt = (float)(now - lastT); lastT = now;
             if (dt <= 0f) dt = 1f / Config.Fps; else if (dt > 0.1f) dt = 0.1f;   // nach Hängern nicht springen
+
+            // Vollbild-Anwendung (z. B. Spiel) im Vordergrund? -> pausieren: nichts zeichnen, Video anhalten.
+            // Erst bei 2 Treffern hintereinander (~1 s), damit kurzes Alt+Tab nicht flackert; Fortsetzen sofort.
+            if (Config.PauseOnFullscreen && now - lastPauseCheck >= 0.5)
+            {
+                lastPauseCheck = now;
+                string by = FullscreenApp();
+                if (by != null) { if (++fsHits >= 2 && !Paused) SetPaused(true, by); }
+                else { fsHits = 0; if (Paused) SetPaused(false, null); }
+            }
+            if (Paused) return;   // Zeit läuft nicht weiter, Animationen setzen nahtlos fort
+
             time += dt; neonT += dt;
 
             // Watchdog: alle ~3 s prüfen, ob wir noch in der richtigen Ebene hängen und die Größe noch stimmt
@@ -1099,6 +1189,8 @@ namespace CyberWallpaperFX
             timer.Tick += (s, e) =>
             {
                 f.Frame();
+                int want = f.Paused ? 250 : 1000 / Config.Fps;   // pausiert: nur noch 4x pro Sekunde nachsehen
+                if (timer.Interval != want) timer.Interval = want;
                 if (f.Fatal != null && !fatalHandled)
                 {
                     fatalHandled = true;

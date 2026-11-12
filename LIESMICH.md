@@ -103,6 +103,17 @@ entfernt, damit nichts doppelt startet.
 - Entwickelt auf Windows 11 (aktueller Build). Für Windows 10 / ältere Windows-11-Builds gibt es eine
   Suche nach der klassischen WorkerW-Ebene, die aber ungetestet ist.
 
+## Pause bei Vollbild (z. B. Spiele)
+Läuft eine Anwendung im Vollbild im Vordergrund (Spiel, Video im Vollbild, Präsentation), ist das
+Wallpaper ohnehin verdeckt: Es **pausiert** dann automatisch – das Video wird angehalten und es wird
+nichts mehr gezeichnet, damit Grafikkarte und CPU frei für das Spiel sind. Sobald die Anwendung nicht
+mehr im Vordergrund ist, läuft es sofort weiter (die Statuszeile der Oberfläche zeigt den Zustand).
+- Erkannt werden randloses Vollbild auf dem Hauptbildschirm und exklusives Direct3D-Vollbild.
+- Vollbild auf einem zweiten Monitor pausiert nicht (das Wallpaper ist dann noch sichtbar).
+- Pausiert wird erst nach ~1 s, damit kurzes Alt+Tab nicht flackert.
+- Einstellungen im `Config`-Block: `PauseOnFullscreen` (an/aus), `PauseOnMaximized` (auch bei
+  maximierten Fenstern pausieren, Standard: aus).
+
 ## Stabilität
 - **Geänderte Bildschirmauflösung** (auch Docking, Monitorwechsel, Remote-Desktop): Das Wallpaper passt
   sich an Ort und Stelle an. Das Video läuft weiter, die Oberfläche bleibt offen.
